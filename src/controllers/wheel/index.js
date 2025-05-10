@@ -1,6 +1,6 @@
 export * from './createWheel.js';
 export * from './addWheelParticipant.js';
-export * from './getwheelParticipants.js';
+export * from './getWheelParticipants.js';
 export * from './drawWinner.js'
 export * from './getParticipations.js';
 export * from './getAllResults.js';
