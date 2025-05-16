@@ -1,6 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
 
 const addUser = async (req, res) => {
+  console.log('📥 [backend] Получен запрос на /users/register');
+
   const { telegram_id, username, wallet, referrer_id } = req.body;
 
   if (!telegram_id || !username) {
