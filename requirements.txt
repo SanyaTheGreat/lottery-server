@@ -1,5 +1,0 @@
-pyTelegramBotAPI
-pyrogram
-tgcrypto
-supabase
-requests
