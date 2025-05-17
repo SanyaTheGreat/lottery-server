@@ -32,7 +32,7 @@ fetch("https://djpcftyqkwucbksknsdu.supabase.co/rest/v1/users", {
   method: "GET",
   headers: {
     "apikey": process.env.SUPABASE_KEY,
-    "Authorization": `Bearer ${process.env.SUPABASE_KEY}`
+    "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
   }
 })
 .then(res => res.json())
