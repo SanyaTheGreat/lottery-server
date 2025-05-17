@@ -47,7 +47,10 @@ const addUser = async (req, res) => {
     .insert([newUser])
     .select();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error){
+    console.error("❌ Ошибка вставки в Supabase:", error.message);
+    return res.status(500).json({ error: error.message });
+  }
 
   res.status(201).json({
     message: 'User registered',
