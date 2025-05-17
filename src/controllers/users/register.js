@@ -31,9 +31,20 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
+  const newUser = {
+    telegram_id,
+    username,
+    wallet: wallet || null,
+    tickets: 0
+  };
+
+  if (referred_by) {
+    newUser.referred_by = referred_by;
+  }
+
   const { data, error } = await supabase
     .from('users')
-    .insert([{ telegram_id, username, wallet: wallet || null, tickets: 0, referred_by }])
+    .insert([newUser])
     .select();
 
   if (error) return res.status(500).json({ error: error.message });
