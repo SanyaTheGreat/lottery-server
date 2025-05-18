@@ -3,6 +3,7 @@ import dotenv from 'dotenv'
 import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
+import cors from 'cors'
 
 dotenv.config()
 console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL)
@@ -10,6 +11,11 @@ console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL)
 const app = express()
 const port = 3000
 
+app.use(cors({
+  origin: 'https://frontend-nine-sigma-49.vercel.app',
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+}))
 app.use(express.json())
 
 app.use('/users', usersRouter)
