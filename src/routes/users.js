@@ -5,13 +5,14 @@ import {
   buyTickets,
   getProfile,
   getReferrals,
-  createSell
+  createSell,
+  getTicketPurchases
 } from '../controllers/users/index.js';
 // import { getAllUsers } from '../controllers/usersController.js'; // опционально
 
 const router = express.Router();
 
-
+router.get('/sells/:telegram_id', getTicketPurchases)
 router.post('/register', addUser);
 router.post('/sell', createSell);
 router.patch('/wallet', updateWallet);
