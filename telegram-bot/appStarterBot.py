@@ -5,7 +5,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 BOT_TOKEN = "7737729183:AAFCgxv-H_1suiIC5T8VkwU6dMjXuK3Fs0s"  # ← заменишь на свой
 
 # 🌐 Ссылка на твой Mini App (frontend на Vercel)
-WEBAPP_URL = "https://t.me/fightforgift_bot?startapp=main"
+WEBAPP_URL = "https://frontend-nine-sigma-49.vercel.app/"
 
 
 bot = telebot.TeleBot(BOT_TOKEN)
