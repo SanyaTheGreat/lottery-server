@@ -7,10 +7,10 @@ const getReferrals = async (req, res) => {
     return res.status(400).json({ error: 'Telegram ID is required' });
   }
 
-  // Получаем ID пользователя по telegram_id
+  // ✅ Получаем ID и referral_earnings пользователя по telegram_id
   const { data: user, error: userError } = await supabase
     .from('users')
-    .select('id')
+    .select('id, referral_earnings') // добавили referral_earnings
     .eq('telegram_id', telegram_id)
     .single();
 
@@ -21,7 +21,7 @@ const getReferrals = async (req, res) => {
   // ✅ Получаем всех пользователей, у кого этот id записан как referred_by
   const { data: referrals, error } = await supabase
     .from('users')
-    .select('referral_earnings') // ✅ Только нужное поле
+    .select('id') // нам не нужны лишние поля
     .eq('referred_by', user.id);
 
   if (error) {
@@ -29,14 +29,13 @@ const getReferrals = async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch referrals' });
   }
 
-  // ✅ Подсчитываем количество и сумму заработка
+  // ✅ Подсчитываем количество
   const referral_count = referrals.length;
-  const referral_earnings = referrals.reduce(
-    (sum, r) => sum + (parseFloat(r.referral_earnings || 0)),
-    0
-  );
 
-  // ✅ Возвращаем в формате, ожидаемом фронтендом
+  // ✅ referral_earnings берём напрямую у пользователя
+  const referral_earnings = parseFloat(user.referral_earnings || 0);
+
+  // ✅ Возвращаем объект, как ожидает frontend
   res.status(200).json({
     referral_count,
     referral_earnings
