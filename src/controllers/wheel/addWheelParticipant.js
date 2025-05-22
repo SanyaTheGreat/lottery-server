@@ -10,7 +10,7 @@ export const joinWheel = async (req, res) => {
   // Получаем данные о колесе (в том числе цену участия)
   const { data: wheel, error: wheelError } = await supabase
     .from('wheels')
-    .select('id, price')
+    .select('id, size, price')
     .eq('id', wheel_id)
     .single();
 
@@ -32,6 +32,20 @@ export const joinWheel = async (req, res) => {
 
   if (existing) {
     return res.status(409).json({ error: 'User already joined this wheel' });
+  }
+
+  // Получаем текущее количество участников
+  const { count: currentCount, error: countError2 } = await supabase
+    .from('wheel_participants')
+    .select('*', { count: 'exact', head: true })
+    .eq('wheel_id', wheel_id);
+
+  if (countError2) {
+    return res.status(500).json({ error: 'Failed to count participants' });
+  }
+
+  if (currentCount >= wheel.size) {
+    return res.status(403).json({ error: 'Wheel is full' });
   }
 
   // Получаем пользователя и проверяем, достаточно ли у него билетов
