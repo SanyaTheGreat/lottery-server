@@ -2,8 +2,8 @@ import { supabase } from './services/supabaseClient.js';
 import fetch from 'node-fetch';
 import { Address } from '@ton/core'; // ← нужно установить: npm i @ton/core
 
-const TONCENTER_API_KEY = 'YOUR_TONCENTER_API_KEY'; // замени на свой ключ
-const TARGET_WALLET = 'UQDEUvNIMwUS03T-OknCGDhcKIADjY_hw5KRl0z8g41PKs87';
+const TONCENTER_API_KEY = 'b743eb1d30111124c2f0511d84862922fa1397830913bd2f07cff2fc04217d89'; // замени на свой ключ
+const TARGET_WALLET = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a';
 const INTERVAL_MS = 60_000;
 
 async function getIncomingTransactions() {
