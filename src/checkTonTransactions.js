@@ -1,8 +1,9 @@
 import { supabase } from './services/supabaseClient.js';
 import fetch from 'node-fetch';
+import { Address } from '@ton/core'; // ← нужно установить: npm i @ton/core
 
-const TONCENTER_API_KEY = 'YOUR_TONCENTER_API_KEY'; // замени на свой API-ключ
-const TARGET_WALLET = 'UQDEUvNIMwUS03T-OknCGDhcKIADjY_hw5KRl0z8g41PKs87'; // ваш кошелёк
+const TONCENTER_API_KEY = 'YOUR_TONCENTER_API_KEY'; // замени на свой ключ
+const TARGET_WALLET = 'UQDEUvNIMwUS03T-OknCGDhcKIADjY_hw5KRl0z8g41PKs87';
 const INTERVAL_MS = 60_000;
 
 async function getIncomingTransactions() {
@@ -15,7 +16,7 @@ async function getIncomingTransactions() {
 }
 
 async function isAlreadyProcessed(txHash) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('sells')
     .select('id')
     .eq('tx_hash', txHash)
@@ -25,7 +26,7 @@ async function isAlreadyProcessed(txHash) {
 }
 
 async function findUserByWallet(wallet) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('users')
     .select('*')
     .eq('wallet', wallet)
@@ -93,17 +94,20 @@ async function processTransactions() {
 
     for (const tx of transactions) {
       const txHash = tx.transaction_id.hash;
-      const sender = tx.in_msg.source;
+      const rawSender = tx.in_msg.source;
       const amountTON = parseFloat(tx.in_msg.value) / 1e9;
 
       if (await isAlreadyProcessed(txHash)) continue;
 
-      const user = await findUserByWallet(sender);
+      // 💡 Преобразование адреса в friendly формат
+      const senderFriendly = Address.parse(rawSender).toString({ bounceable: true });
+
+      const user = await findUserByWallet(senderFriendly);
       if (!user) continue;
 
       await saveSellRecord({
         telegram_id: user.telegram_id,
-        wallet: sender,
+        wallet: senderFriendly,
         amount: amountTON,
         tx_hash: txHash,
       });
@@ -111,7 +115,7 @@ async function processTransactions() {
       await updateUserTickets(user.telegram_id, amountTON);
       await rewardReferrer(user.telegram_id, amountTON);
 
-      console.log(`✅ Начислено ${amountTON} билетов для ${sender}`);
+      console.log(`✅ Начислено ${amountTON} билетов для ${senderFriendly}`);
     }
   } catch (err) {
     console.error('Ошибка при обработке транзакций:', err);
