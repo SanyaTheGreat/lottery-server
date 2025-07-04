@@ -1,126 +1,52 @@
-import { supabase } from './services/supabaseClient.js';
 import fetch from 'node-fetch';
-import { Address } from '@ton/core'; // ← нужно установить: npm i @ton/core
+import { handleTransaction } from './buyTickets.js'; // если ты обрабатываешь покупки
+import dotenv from 'dotenv';
 
-const TONCENTER_API_KEY = 'b743eb1d30111124c2f0511d84862922fa1397830913bd2f07cff2fc04217d89'; // замени на свой ключ
-const TARGET_WALLET = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a';
-const INTERVAL_MS = 60_000;
+dotenv.config();
+
+const TONAPI_KEY = process.env.TONAPI_KEY || 'AGRLZGBRUVZFQPIAAAAG35EJ5BX0MDGMUZCASSBUUYAHUXLFR4GIXDZQVDF16U2QFBUJ7CY';
+const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a'; // RAW
+let processedTxs = new Set();
 
 async function getIncomingTransactions() {
-  const url = `https://toncenter.com/api/v2/getTransactions?address=${TARGET_WALLET}&limit=20&api_key=${TONCENTER_API_KEY}`;
-  const res = await fetch(url);
+  const url = `https://tonapi.io/v2/blockchain/accounts/${WALLET_ADDRESS}/transactions?limit=20`;
+
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${TONAPI_KEY}`,
+    },
+  });
+
   const data = await res.json();
 
-  if (!data.ok) throw new Error('Ошибка при получении транзакций');
-  return data.result.filter(tx => tx.in_msg?.source && tx.in_msg.value > 0);
+  if (!res.ok) {
+    console.error('Ошибка TonAPI:', data);
+    return [];
+  }
+
+  return data.transactions || [];
 }
 
-async function isAlreadyProcessed(txHash) {
-  const { data } = await supabase
-    .from('sells')
-    .select('id')
-    .eq('tx_hash', txHash)
-    .single();
-
-  return !!data;
-}
-
-async function findUserByWallet(wallet) {
-  const { data } = await supabase
-    .from('users')
-    .select('*')
-    .eq('wallet', wallet)
-    .single();
-
-  return data;
-}
-
-async function saveSellRecord({ telegram_id, wallet, amount, tx_hash }) {
-  const { error } = await supabase.from('sells').insert([
-    {
-      telegram_id,
-      wallet,
-      amount,
-      tx_hash,
-      status: 'confirmed',
-    },
-  ]);
-  return !error;
-}
-
-async function updateUserTickets(telegram_id, amount) {
-  const { data: user } = await supabase
-    .from('users')
-    .select('tickets')
-    .eq('telegram_id', telegram_id)
-    .single();
-
-  const current = user?.tickets ?? 0;
-
-  await supabase
-    .from('users')
-    .update({ tickets: current + amount })
-    .eq('telegram_id', telegram_id);
-}
-
-async function rewardReferrer(telegram_id, amount) {
-  const { data: user } = await supabase
-    .from('users')
-    .select('referrer_id')
-    .eq('telegram_id', telegram_id)
-    .single();
-
-  if (!user?.referrer_id) return;
-
-  const bonus = amount * 0.1;
-
-  const { data: ref } = await supabase
-    .from('users')
-    .select('referral_earnings')
-    .eq('telegram_id', user.referrer_id)
-    .single();
-
-  const current = ref?.referral_earnings ?? 0;
-
-  await supabase
-    .from('users')
-    .update({ referral_earnings: current + bonus })
-    .eq('telegram_id', user.referrer_id);
-}
-
-async function processTransactions() {
+async function checkTransactions() {
   try {
     const transactions = await getIncomingTransactions();
 
     for (const tx of transactions) {
-      const txHash = tx.transaction_id.hash;
-      const rawSender = tx.in_msg.source;
-      const amountTON = parseFloat(tx.in_msg.value) / 1e9;
+      if (!tx.in_msg?.value || processedTxs.has(tx.tx_hash)) continue;
 
-      if (await isAlreadyProcessed(txHash)) continue;
+      const from = tx.in_msg.source;
+      const amount = parseInt(tx.in_msg.value) / 1e9;
 
-      // 💡 Преобразование адреса в friendly формат
-      const senderFriendly = Address.parse(rawSender).toString({ bounceable: true });
+      console.log(`💰 Получено ${amount} TON от ${from}`);
 
-      const user = await findUserByWallet(senderFriendly);
-      if (!user) continue;
+      // Вызов логики начисления билетов
+      await handleTransaction(from, amount);
 
-      await saveSellRecord({
-        telegram_id: user.telegram_id,
-        wallet: senderFriendly,
-        amount: amountTON,
-        tx_hash: txHash,
-      });
-
-      await updateUserTickets(user.telegram_id, amountTON);
-      await rewardReferrer(user.telegram_id, amountTON);
-
-      console.log(`✅ Начислено ${amountTON} билетов для ${senderFriendly}`);
+      processedTxs.add(tx.tx_hash);
     }
-  } catch (err) {
-    console.error('Ошибка при обработке транзакций:', err);
+  } catch (error) {
+    console.error('❌ Ошибка при обработке транзакций:', error.message);
   }
 }
 
-setInterval(processTransactions, INTERVAL_MS);
-console.log('💸 checkTonTransactions.js запущен. Проверка каждые 60 секунд.');
+setInterval(checkTransactions, 60_000); // каждые 60 сек
