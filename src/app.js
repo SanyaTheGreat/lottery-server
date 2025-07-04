@@ -3,14 +3,9 @@ import dotenv from 'dotenv'
 import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
-import express from 'express'
-import dotenv from 'dotenv'
-import { supabase } from './services/supabaseClient.js'
-import usersRouter from './routes/users.js'
-import wheelRoutes from './routes/wheel.js'
 import cors from 'cors'
 import './checkTonTransactions.js' // ← добавили фоновый скрипт
-import cors from 'cors'
+
 
 dotenv.config()
 console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL)
