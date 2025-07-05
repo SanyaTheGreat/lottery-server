@@ -59,4 +59,4 @@ const addUser = async (req, res) => {
   });
 };
 
-export default addUse
+export default addUser
