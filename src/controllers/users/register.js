@@ -1,5 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 import { beginCell } from '@ton/core';
+import { Buffer } from 'buffer';
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -32,10 +33,10 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Генерация payload через Buffer
+  // ✅ Генерация корректного payload
   let payload = null;
   try {
-    const cell = beginCell().storeUint(telegram_id, 64).endCell();
+    const cell = beginCell().storeUint(BigInt(telegram_id), 64).endCell();
     const boc = cell.toBoc();
     payload = Buffer.from(boc).toString('base64');
   } catch (e) {
