@@ -1,12 +1,12 @@
 import fetch from 'node-fetch';
-import { handleTransaction } from './controllers/users/buyTickets.js'; // если ты обрабатываешь покупки
+import { handleTransaction } from './controllers/users/processPurchase.js';
+import { supabase } from './services/supabaseClient.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const TONAPI_KEY = process.env.TONAPI_KEY || 'AGRLZGBRUVZFQPIAAAAG35EJ5BX0MDGMUZCASSBUUYAHUXLFR4GIXDZQVDF16U2QFBUJ7CY';
-const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a'; // RAW
-let processedTxs = new Set();
+const TONAPI_KEY = process.env.TONAPI_KEY;
+const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a';
 
 async function getIncomingTransactions() {
   const url = `https://tonapi.io/v2/blockchain/accounts/${WALLET_ADDRESS}/transactions?limit=20`;
@@ -27,26 +27,38 @@ async function getIncomingTransactions() {
   return data.transactions || [];
 }
 
+async function isTxProcessed(tx_hash) {
+  const { data, error } = await supabase
+    .from('sells')
+    .select('id')
+    .eq('tx_hash', tx_hash)
+    .maybeSingle();
+
+  return !!data;
+}
+
 async function checkTransactions() {
   try {
     const transactions = await getIncomingTransactions();
 
     for (const tx of transactions) {
-      if (!tx.in_msg?.value || processedTxs.has(tx.tx_hash)) continue;
+      const tx_hash = tx.tx_hash;
+      const from = tx.in_msg?.source;
+      const amount = parseInt(tx.in_msg?.value || '0') / 1e9;
 
-      const from = tx.in_msg.source;
-      const amount = parseInt(tx.in_msg.value) / 1e9;
+      if (!from || amount <= 0) continue;
+
+      const already = await isTxProcessed(tx_hash);
+      if (already) continue;
 
       console.log(`💰 Получено ${amount} TON от ${from}`);
 
-      // Вызов логики начисления билетов
-      await handleTransaction(from, amount);
+      await handleTransaction(from, amount, tx_hash); // передаём хеш транзакции
 
-      processedTxs.add(tx.tx_hash);
     }
   } catch (error) {
     console.error('❌ Ошибка при обработке транзакций:', error.message);
   }
 }
 
-setInterval(checkTransactions, 60_000); // каждые 60 сек
+setInterval(checkTransactions, 60_000);
