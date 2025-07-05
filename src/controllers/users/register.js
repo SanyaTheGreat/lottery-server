@@ -1,6 +1,4 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { beginCell } from '@ton/core';
-import { Buffer } from 'buffer';
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -33,16 +31,8 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Генерация корректного payload в формате TON BOC
-  let payload = null;
-  try {
-    const cell = beginCell().storeUint(BigInt(telegram_id), 64).endCell();
-    const boc = cell.toBoc();
-    payload = Buffer.from(boc).toString('base64');
-  } catch (e) {
-    console.error('❌ Ошибка генерации payload:', e.message);
-    return res.status(500).json({ error: 'Payload generation failed' });
-  }
+  // ✅ Используем простой читаемый comment вместо BOC payload
+  const payload = `tg:${telegram_id}`;
 
   const newUser = {
     telegram_id,
@@ -69,4 +59,4 @@ const addUser = async (req, res) => {
   });
 };
 
-export default addUser;
+export default addUse

@@ -2,7 +2,6 @@ import fetch from 'node-fetch';
 import handleTransaction from './controllers/users/processPurchase.js';
 import { supabase } from './services/supabaseClient.js';
 import dotenv from 'dotenv';
-import { Cell } from '@ton/core';
 
 dotenv.config();
 
@@ -10,22 +9,9 @@ const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974c
 const CHECK_INTERVAL = 60_000;
 const DEBUG = true;
 
-function decodeTelegramIdFromPayload(payloadBase64) {
-  try {
-    const payloadBuffer = Buffer.from(payloadBase64, 'base64');
-    const cell = Cell.fromBoc(payloadBuffer)[0];
-    const slice = cell.beginParse();
-    const telegramId = slice.loadUintBig(64).toString();
-    return telegramId;
-  } catch (e) {
-    console.error('❌ Ошибка при декодировании payload:', e.message);
-    return null;
-  }
-}
-
 async function getIncomingTransactions() {
   const url = `https://tonapi.io/v2/blockchain/accounts/${WALLET_ADDRESS}/transactions?limit=20`;
-  console.log('🔗 URL запроса TonAPI:', url);
+  if (DEBUG) console.log('🔗 URL запроса TonAPI:', url);
 
   const res = await fetch(url);
   const data = await res.json();
@@ -39,7 +25,7 @@ async function getIncomingTransactions() {
 }
 
 async function isTxProcessed(tx_hash) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('sells')
     .select('id')
     .eq('tx_hash', tx_hash)
@@ -53,7 +39,7 @@ async function checkTransactions() {
     const transactions = await getIncomingTransactions();
 
     if (transactions.length === 0) {
-      console.log('🔍 Нет новых транзакций.');
+      if (DEBUG) console.log('🔍 Нет новых транзакций.');
       return;
     }
 
@@ -66,13 +52,13 @@ async function checkTransactions() {
         from: inMsg?.source?.address,
         to: inMsg?.destination?.address,
         amount: inMsg?.value,
-        payload: inMsg?.payload,
+        comment: inMsg?.comment,
         is_scam: inMsg?.source?.is_scam,
       };
       if (DEBUG) console.log('🔎 Транзакция:', debugInfo);
 
-      if (!inMsg || !inMsg.source?.address || !inMsg.value || !inMsg.payload) {
-        if (DEBUG) console.log('⛔ Пропуск: нет in_msg, адреса, значения или payload');
+      if (!inMsg || !inMsg.source?.address || !inMsg.value || !inMsg.comment) {
+        if (DEBUG) console.log('⛔ Пропуск: нет in_msg, адреса, значения или комментария');
         continue;
       }
 
@@ -99,11 +85,15 @@ async function checkTransactions() {
         continue;
       }
 
-      const telegram_id = decodeTelegramIdFromPayload(inMsg.payload);
-      if (!telegram_id) {
-        if (DEBUG) console.log('⛔ Пропуск: не удалось декодировать telegram_id');
+      // ✅ Извлекаем telegram_id из комментария
+      const comment = inMsg.comment.trim();
+      const match = comment.match(/^tg:(\d{5,20})$/);
+      if (!match) {
+        if (DEBUG) console.log(`⛔ Пропуск: некорректный формат комментария: "${comment}"`);
         continue;
       }
+
+      const telegram_id = match[1];
 
       const readableDate = new Date(tx.utime * 1000).toLocaleString();
       console.log(`💸 [${readableDate}] Получено ${amountTON} TON от ${inMsg.source.address} (TG ID: ${telegram_id})`);
