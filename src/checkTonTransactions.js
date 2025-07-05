@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import { handleTransaction } from './controllers/users/processPurchase.js';
+import handleTransaction  from './controllers/users/processPurchase.js';
 import { supabase } from './services/supabaseClient.js';
 import dotenv from 'dotenv';
 
