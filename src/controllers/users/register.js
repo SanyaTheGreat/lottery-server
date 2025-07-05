@@ -1,6 +1,7 @@
 import { supabase } from '../../services/supabaseClient.js';
 import { beginCell } from '@ton/core';
-import { toBase64 } from '@ton/crypto';
+import tonCrypto from '@ton/crypto'; // ✅ импорт CommonJS-модуля
+const { toBase64 } = tonCrypto;
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -11,7 +12,6 @@ const addUser = async (req, res) => {
     return res.status(400).json({ error: 'Username and Telegram ID are required' });
   }
 
-  // Проверка, существует ли пользователь
   const { data: existingUser, error: checkError } = await supabase
     .from('users')
     .select('id, referred_by')
@@ -24,7 +24,6 @@ const addUser = async (req, res) => {
 
   let referred_by = null;
 
-  // Проверка реферала
   if (referrer_id && referrer_id !== telegram_id) {
     const { data: referrer } = await supabase
       .from('users')
@@ -35,7 +34,7 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Корректная генерация payload
+  // ✅ Генерация payload (base64)
   let payload = null;
   try {
     const cell = beginCell().storeUint(telegram_id, 64).endCell();
