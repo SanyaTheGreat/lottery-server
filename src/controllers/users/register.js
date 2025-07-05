@@ -1,5 +1,4 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { beginCell } from '@ton/core';
 import { Buffer } from 'buffer';
 
 const addUser = async (req, res) => {
@@ -33,12 +32,11 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Генерация корректного payload
+  // ✅ Генерация простого читаемого payload
   let payload = null;
   try {
-    const cell = beginCell().storeUint(BigInt(telegram_id), 64).endCell();
-    const boc = cell.toBoc();
-    payload = Buffer.from(boc).toString('base64');
+    const plainText = `tg:${telegram_id}`;
+    payload = Buffer.from(plainText, 'utf-8').toString('base64');
   } catch (e) {
     console.error('❌ Ошибка генерации payload:', e.message);
     return res.status(500).json({ error: 'Payload generation failed' });
