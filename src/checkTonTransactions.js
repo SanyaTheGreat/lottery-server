@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import { handleTransaction } from './buyTickets.js'; // если ты обрабатываешь покупки
+import { handleTransaction } from './controllers/users/buyTickets.js'; // если ты обрабатываешь покупки
 import dotenv from 'dotenv';
 
 dotenv.config();
