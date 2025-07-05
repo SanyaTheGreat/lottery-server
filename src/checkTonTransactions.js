@@ -1,12 +1,13 @@
 import fetch from 'node-fetch';
-import handleTransaction  from './controllers/users/processPurchase.js';
+import handleTransaction from './controllers/users/processPurchase.js';
 import { supabase } from './services/supabaseClient.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const TONAPI_KEY = process.env.TONAPI_KEY;
-const WALLET_ADDRESS = 'UQDEUvNIMwUS03T-OknCGDhcKIADjY_hw5KRl0z8g41PKs87';
+const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a';
+const CHECK_INTERVAL = 60_000;
 
 async function getIncomingTransactions() {
   const url = `https://tonapi.io/v2/blockchain/accounts/${WALLET_ADDRESS}/transactions?limit=20`;
@@ -20,7 +21,7 @@ async function getIncomingTransactions() {
   const data = await res.json();
 
   if (!res.ok) {
-    console.error('Ошибка TonAPI:', data);
+    console.error('❌ Ошибка TonAPI:', data);
     return [];
   }
 
@@ -41,24 +42,50 @@ async function checkTransactions() {
   try {
     const transactions = await getIncomingTransactions();
 
+    if (transactions.length === 0) {
+      console.log('🔍 Нет новых транзакций.');
+      return;
+    }
+
     for (const tx of transactions) {
-      const tx_hash = tx.tx_hash;
-      const from = tx.in_msg?.source;
-      const amount = parseInt(tx.in_msg?.value || '0') / 1e9;
+      const tx_hash = tx.hash;
+      const inMsg = tx.in_msg;
 
-      if (!from || amount <= 0) continue;
+      // ✅ Пропустить, если нет входящего сообщения
+      if (!inMsg || !inMsg.source?.address || !inMsg.value) continue;
 
+      const sender = inMsg.source.address;
+      const destination = inMsg.destination;
+      const amountTON = parseInt(inMsg.value) / 1e9;
+
+      // ✅ Только входящие на наш кошелёк
+      if (destination !== WALLET_ADDRESS) continue;
+
+      // ✅ Только положительные переводы
+      if (amountTON <= 0) continue;
+
+      // ✅ Пропустить, если скам
+      if (inMsg.source.is_scam) {
+        console.warn(`🚫 Скам-адрес: ${sender} — транзакция пропущена`);
+        continue;
+      }
+
+      // ✅ Пропустить, если уже обработано
       const already = await isTxProcessed(tx_hash);
       if (already) continue;
 
-      console.log(`💰 Получено ${amount} TON от ${from}`);
+      const readableDate = new Date(tx.utime * 1000).toLocaleString();
 
-      await handleTransaction(from, amount, tx_hash); // передаём хеш транзакции
+      console.log(`💸 [${readableDate}] Получено ${amountTON} TON от ${sender}`);
+      console.log(`🔗 Хеш транзакции: ${tx_hash}`);
 
+      // ✅ Обработка: начисление билетов
+      await handleTransaction(sender, amountTON, tx_hash);
     }
   } catch (error) {
     console.error('❌ Ошибка при обработке транзакций:', error.message);
   }
 }
 
-setInterval(checkTransactions, 60_000);
+console.log('🚀 Запущен мониторинг транзакций TON...');
+setInterval(checkTransactions, CHECK_INTERVAL);
