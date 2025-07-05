@@ -16,9 +16,6 @@ async function getIncomingTransactions() {
   console.log("🔑 TONAPI_KEY:", TONAPI_KEY);
 
   const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${TONAPI_KEY}`,
-    },
   });
 
   const data = await res.json();
