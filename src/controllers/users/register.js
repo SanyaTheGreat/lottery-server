@@ -1,4 +1,5 @@
 import { supabase } from '../../services/supabaseClient.js';
+import { beginCell } from '@ton/core';
 import { Buffer } from 'buffer';
 
 const addUser = async (req, res) => {
@@ -32,11 +33,12 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Генерация простого читаемого payload
+  // ✅ Генерация корректного payload в формате TON BOC
   let payload = null;
   try {
-    const plainText = `tg:${telegram_id}`;
-    payload = Buffer.from(plainText, 'utf-8').toString('base64');
+    const cell = beginCell().storeUint(BigInt(telegram_id), 64).endCell();
+    const boc = cell.toBoc();
+    payload = Buffer.from(boc).toString('base64');
   } catch (e) {
     console.error('❌ Ошибка генерации payload:', e.message);
     return res.status(500).json({ error: 'Payload generation failed' });
@@ -47,12 +49,9 @@ const addUser = async (req, res) => {
     username,
     wallet: wallet || null,
     tickets: 0,
-    payload
+    payload,
+    ...(referred_by && { referred_by }),
   };
-
-  if (referred_by) {
-    newUser.referred_by = referred_by;
-  }
 
   const { data, error } = await supabase
     .from('users')
@@ -66,7 +65,7 @@ const addUser = async (req, res) => {
 
   res.status(201).json({
     message: 'User registered',
-    user: data?.[0] || null
+    user: data?.[0] || null,
   });
 };
 
