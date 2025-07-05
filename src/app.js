@@ -1,5 +1,7 @@
-import express from 'express'
 import dotenv from 'dotenv'
+dotenv.config()
+
+import express from 'express'
 import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
@@ -7,7 +9,8 @@ import cors from 'cors'
 import './checkTonTransactions.js' // ← добавили фоновый скрипт
 
 
-dotenv.config()
+
+
 console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL)
 
 const app = express()
