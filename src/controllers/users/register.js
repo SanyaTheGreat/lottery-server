@@ -1,4 +1,5 @@
 import { supabase } from '../../services/supabaseClient.js';
+import { beginCell } from '@ton/core';
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -31,11 +32,25 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
+  // ✅ Генерация payload
+  let payload = null;
+  try {
+    payload = beginCell()
+      .storeUint(telegram_id, 64)
+      .endCell()
+      .toBoc()
+      .toString('base64');
+  } catch (e) {
+    console.error('❌ Ошибка генерации payload:', e.message);
+    return res.status(500).json({ error: 'Payload generation failed' });
+  }
+
   const newUser = {
     telegram_id,
     username,
     wallet: wallet || null,
-    tickets: 0
+    tickets: 0,
+    payload
   };
 
   if (referred_by) {
@@ -47,7 +62,7 @@ const addUser = async (req, res) => {
     .insert([newUser])
     .select();
 
-  if (error){
+  if (error) {
     console.error("❌ Ошибка вставки в Supabase:", error.message);
     return res.status(500).json({ error: error.message });
   }
