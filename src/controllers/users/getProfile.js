@@ -9,7 +9,7 @@ const getProfile = async (req, res) => {
 
   const { data, error } = await supabase
     .from('users')
-    .select('username, wallet, tickets, referral_earnings')
+    .select('username, wallet, tickets, payload, referral_earnings')
     .eq('telegram_id', telegram_id)
     .single();
 
