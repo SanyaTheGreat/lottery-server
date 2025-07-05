@@ -1,7 +1,5 @@
 import { supabase } from '../../services/supabaseClient.js';
 import { beginCell } from '@ton/core';
-import tonCrypto from '@ton/crypto'; // ✅ импорт CommonJS-модуля
-const { toBase64 } = tonCrypto;
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -34,11 +32,12 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Генерация payload (base64)
+  // ✅ Генерация payload через Buffer
   let payload = null;
   try {
     const cell = beginCell().storeUint(telegram_id, 64).endCell();
-    payload = toBase64(cell.toBoc());
+    const boc = cell.toBoc();
+    payload = Buffer.from(boc).toString('base64');
   } catch (e) {
     console.error('❌ Ошибка генерации payload:', e.message);
     return res.status(500).json({ error: 'Payload generation failed' });
