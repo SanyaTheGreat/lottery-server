@@ -1,29 +1,25 @@
-// controllers/users/processPurchase.js
 import { supabase } from '../../services/supabaseClient.js';
 
-const handleTransaction = async (senderWallet, amountTON, tx_hash) => {
+const handleTransaction = async (telegram_id, amountTON, tx_hash) => {
   const { data: userData, error: userError } = await supabase
     .from('users')
     .select('*')
-    .eq('wallet', senderWallet)
+    .eq('telegram_id', telegram_id)
     .single();
 
   if (userError || !userData) {
-    console.error('❌ User not found for wallet:', senderWallet);
+    console.error('❌ User not found for telegram_id:', telegram_id);
     return;
   }
 
   const quantity = amountTON;
   const newTicketCount = userData.tickets + quantity;
-  let updates = { tickets: newTicketCount };
-
-  // ✅ Реферальный бонус — временно отключён по твоему решению
-  // if (userData.referred_by) { ... }
+  const updates = { tickets: newTicketCount };
 
   const { error: updateError } = await supabase
     .from('users')
     .update(updates)
-    .eq('telegram_id', userData.telegram_id);
+    .eq('telegram_id', telegram_id);
 
   if (updateError) {
     console.error('❌ Ошибка обновления пользователя:', updateError.message);
@@ -31,10 +27,10 @@ const handleTransaction = async (senderWallet, amountTON, tx_hash) => {
   }
 
   const { error: insertError } = await supabase.from('sells').insert([{
-    telegram_id: userData.telegram_id,
+    telegram_id,
     wallet: userData.wallet,
     amount: quantity,
-    tx_hash: tx_hash // ✅ сохраняем хеш
+    tx_hash: tx_hash,
   }]);
 
   if (insertError) {
@@ -42,7 +38,7 @@ const handleTransaction = async (senderWallet, amountTON, tx_hash) => {
     return;
   }
 
-  console.log(`🎟 Билеты успешно начислены пользователю ${userData.telegram_id}`);
+  console.log(`🎟 Билеты успешно начислены пользователю ${telegram_id}`);
 };
 
 export default handleTransaction;
