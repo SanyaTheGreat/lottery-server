@@ -12,6 +12,8 @@ const CHECK_INTERVAL = 60_000;
 async function getIncomingTransactions() {
   const url = `https://tonapi.io/v2/blockchain/accounts/0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a/transactions?limit=20`;
 
+  console.log('🔗 URL запроса TonAPI:', url);
+
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${TONAPI_KEY}`,
