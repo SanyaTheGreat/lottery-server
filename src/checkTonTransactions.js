@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const TONAPI_KEY = process.env.TONAPI_KEY;
-const WALLET_ADDRESS = '0:c452f348330512d374fe3a49c218385c2880038d8fe1c39291974cfc838d4f2a';
+const WALLET_ADDRESS = 'UQDEUvNIMwUS03T-OknCGDhcKIADjY_hw5KRl0z8g41PKs87';
 
 async function getIncomingTransactions() {
   const url = `https://tonapi.io/v2/blockchain/accounts/${WALLET_ADDRESS}/transactions?limit=20`;
