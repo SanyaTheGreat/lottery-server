@@ -1,5 +1,5 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { handleTransaction } from './processPurchase.js';
+import  handleTransaction  from './processPurchase.js';
 
 const buyTickets = async (req, res) => {
   const { telegram_id, quantity } = req.body;
