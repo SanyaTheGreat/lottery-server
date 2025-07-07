@@ -1,4 +1,10 @@
 import { supabase } from '../../services/supabaseClient.js';
+import { beginCell } from '@ton/ton'; // добавьте импорт для beginCell
+
+// Функция для преобразования base64 в base64url без паддинга
+function toBase64Url(base64) {
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
@@ -31,8 +37,14 @@ const addUser = async (req, res) => {
     if (referrer && referrer[0]) referred_by = referrer[0].id;
   }
 
-  // ✅ Используем простой читаемый comment вместо BOC payload
-  const payload = `tg:${telegram_id}`;
+  // Генерация payload в формате base64url без паддинга
+  const cell = beginCell()
+    .storeUint(0, 32) // префикс (32 нуля)
+    .storeStringTail(`tg:${telegram_id}`)
+    .endCell();
+
+  const base64 = cell.toBoc().toString('base64');
+  const payload = toBase64Url(base64);
 
   const newUser = {
     telegram_id,
@@ -59,4 +71,4 @@ const addUser = async (req, res) => {
   });
 };
 
-export default addUser
+export default addUser;
