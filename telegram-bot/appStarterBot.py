@@ -3,7 +3,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from supabase import create_client, Client
 
 # 🔐 Укажи токен своего Telegram-бота
-BOT_TOKEN = "7737729183:AAGnfPTgl_HJDI6nLpj3iP1HUBAt09Wlc1Y"  # ← заменишь на свой
+BOT_TOKEN = "7737729183:AAEkmSIEiO0QG0tmkGzKde3wpMuiIVg5KKY"  # ← заменишь на свой
 
 # ✅ Supabase конфиг
 SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
