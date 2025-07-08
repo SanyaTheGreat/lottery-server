@@ -40,7 +40,7 @@ const addUser = async (req, res) => {
   // Генерация payload в формате base64url без паддинга
   const cell = beginCell()
     .storeUint(0, 32) // префикс (32 нуля)
-    .storeStringTail(`tg:${telegram_id}`)
+    .storeStringTail(`${telegram_id}`)
     .endCell();
 
   const base64 = cell.toBoc().toString('base64');
