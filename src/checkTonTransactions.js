@@ -87,7 +87,7 @@ async function checkTransactions() {
 
       // ✅ Извлекаем telegram_id из комментария
       const comment = inMsg.comment.trim();
-      const match = comment.match(/^tg:(\d{5,20})$/);
+      const match = comment.match(/^(\d{5,20})$/);
       if (!match) {
         if (DEBUG) console.log(`⛔ Пропуск: некорректный формат комментария: "${comment}"`);
         continue;
