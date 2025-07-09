@@ -47,17 +47,25 @@ async function checkTransactions() {
       const tx_hash = tx.hash;
       const inMsg = tx.in_msg;
 
+      // Извлечение комментария из decoded_body.text если есть
+      let comment;
+      if (inMsg && inMsg.decoded_op_name === 'text_comment') {
+        comment = inMsg.decoded_body?.text?.trim();
+      } else {
+        comment = undefined;
+      }
+
       const debugInfo = {
         hash: tx.hash,
         from: inMsg?.source?.address,
         to: inMsg?.destination?.address,
         amount: inMsg?.value,
-        comment: inMsg?.comment,
+        comment,
         is_scam: inMsg?.source?.is_scam,
       };
       if (DEBUG) console.log('🔎 Транзакция:', debugInfo);
 
-      if (!inMsg || !inMsg.source?.address || !inMsg.value || !inMsg.comment) {
+      if (!inMsg || !inMsg.source?.address || !inMsg.value || !comment) {
         if (DEBUG) console.log('⛔ Пропуск: нет in_msg, адреса, значения или комментария');
         continue;
       }
@@ -86,7 +94,6 @@ async function checkTransactions() {
       }
 
       // ✅ Извлекаем telegram_id из комментария
-      const comment = inMsg.comment.trim();
       const match = comment.match(/^(\d{5,20})$/);
       if (!match) {
         if (DEBUG) console.log(`⛔ Пропуск: некорректный формат комментария: "${comment}"`);
