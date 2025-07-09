@@ -7,6 +7,8 @@ import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
 import cors from 'cors'
 import './checkTonTransactions.js' // ← добавили фоновый скрипт
+import './autoDraw.js'
+
 
 
 
