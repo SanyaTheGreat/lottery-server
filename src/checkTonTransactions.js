@@ -43,11 +43,22 @@ async function checkTransactions() {
       return;
     }
 
+    // Счётчики для статистики
+    let total = 0;
+    let processedCount = 0;
+    let skippedNoInMsg = 0;
+    let skippedNotOurAddress = 0;
+    let skippedZeroAmount = 0;
+    let skippedScam = 0;
+    let skippedAlreadyProcessed = 0;
+    let skippedBadComment = 0;
+
     for (const tx of transactions) {
+      total++;
+
       const tx_hash = tx.hash;
       const inMsg = tx.in_msg;
 
-      // Извлечение комментария из decoded_body.text если есть
       let comment;
       if (inMsg && inMsg.decoded_op_name === 'text_comment') {
         comment = inMsg.decoded_body?.text?.trim();
@@ -55,59 +66,55 @@ async function checkTransactions() {
         comment = undefined;
       }
 
-      const debugInfo = {
-        hash: tx.hash,
-        from: inMsg?.source?.address,
-        to: inMsg?.destination?.address,
-        amount: inMsg?.value,
-        comment,
-        is_scam: inMsg?.source?.is_scam,
-      };
-      if (DEBUG) console.log('🔎 Транзакция:', debugInfo);
-
       if (!inMsg || !inMsg.source?.address || !inMsg.value || !comment) {
-        if (DEBUG) console.log('⛔ Пропуск: нет in_msg, адреса, значения или комментария');
+        skippedNoInMsg++;
         continue;
       }
 
       const destination = inMsg.destination?.address;
       if (destination !== WALLET_ADDRESS) {
-        if (DEBUG) console.log('⛔ Пропуск: не наш адрес');
+        skippedNotOurAddress++;
         continue;
       }
 
       const amountTON = parseInt(inMsg.value) / 1e9;
       if (amountTON <= 0) {
-        if (DEBUG) console.log('⛔ Пропуск: 0 TON');
+        skippedZeroAmount++;
         continue;
       }
 
       if (inMsg.source.is_scam) {
-        console.warn(`🚫 Скам-адрес: ${inMsg.source.address} — транзакция пропущена`);
+        skippedScam++;
         continue;
       }
 
       const already = await isTxProcessed(tx_hash);
       if (already) {
-        if (DEBUG) console.log('⛔ Пропуск: уже обработано');
+        skippedAlreadyProcessed++;
         continue;
       }
 
-      // ✅ Извлекаем telegram_id из комментария
       const match = comment.match(/^(\d{5,20})$/);
       if (!match) {
-        if (DEBUG) console.log(`⛔ Пропуск: некорректный формат комментария: "${comment}"`);
+        skippedBadComment++;
         continue;
       }
 
       const telegram_id = match[1];
 
-      const readableDate = new Date(tx.utime * 1000).toLocaleString();
-      console.log(`💸 [${readableDate}] Получено ${amountTON} TON от ${inMsg.source.address} (TG ID: ${telegram_id})`);
-      console.log(`🔗 Хеш транзакции: ${tx_hash}`);
-
       await handleTransaction(telegram_id, amountTON, tx_hash);
+      processedCount++;
     }
+
+    console.log(`Обработано ${total} транзакций:`);
+    console.log(`  - успешно обработано: ${processedCount}`);
+    console.log(`  - пропущено (нет in_msg или комментария): ${skippedNoInMsg}`);
+    console.log(`  - пропущено (не наш адрес): ${skippedNotOurAddress}`);
+    console.log(`  - пропущено (0 TON): ${skippedZeroAmount}`);
+    console.log(`  - пропущено (скам-адрес): ${skippedScam}`);
+    console.log(`  - пропущено (уже обработано): ${skippedAlreadyProcessed}`);
+    console.log(`  - пропущено (некорректный комментарий): ${skippedBadComment}`);
+
   } catch (error) {
     console.error('❌ Ошибка при обработке транзакций:', error.message);
   }
