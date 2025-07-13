@@ -11,7 +11,8 @@ import {
   deleteWheel,
   logNftTransfer,
   getPendingRewards,
-  claimReward
+  claimReward,
+  getWheelById
 } from '../controllers/wheel/index.js';
 
 
@@ -24,6 +25,7 @@ router.get('/active', getActiveWheels);
 router.get('/completed', getCompletedWheels);
 
 router.get('/:wheel_id/participants', getWheelParticipants);
+router.get('/:wheel_id', getWheelById);
 router.post('/create', createWheel);
 router.post('/join', joinWheel);
 router.post('/:wheel_id/draw', drawWinner);
