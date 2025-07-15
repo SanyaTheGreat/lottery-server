@@ -4,6 +4,7 @@ export const getAllResults = async (req, res) => {
   const { data, error } = await supabase
     .from('wheel_results')
     .select(`
+      wheel_id,
       completed_at,
       wheels (
         nft_name,
@@ -21,6 +22,7 @@ export const getAllResults = async (req, res) => {
   }
 
   const results = data.map(r => ({
+    wheel_id: r.wheel_id,
     completed_at: r.completed_at,
     nft_name: r.wheels?.nft_name,
     nft_number: r.wheels?.nft_number,

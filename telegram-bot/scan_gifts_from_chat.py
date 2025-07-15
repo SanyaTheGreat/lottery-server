@@ -11,7 +11,7 @@ api_hash = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 session_name = "OGstorage_account"
 
 # 👤 Второй аккаунт (источник подарков)
-SECOND_USER_ID = 1889455597
+SECOND_USER_ID = 279952870
 
 # Supabase init
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://djpcftyqkwucbksknsdu.supabase.co")
