@@ -1,6 +1,32 @@
 import { supabase } from '../../services/supabaseClient.js';
 
+// Проверяем, обработана ли транзакция с таким tx_hash
+const isTxProcessed = async (tx_hash) => {
+  const { data, error } = await supabase
+    .from('sells')
+    .select('id')
+    .eq('tx_hash', tx_hash)
+    .single();
+
+  if (error) {
+    // Если ошибка — проверим, что это ошибка "запись не найдена"
+    if (error.code === 'PGRST116') {
+      return false; // транзакция не найдена, значит не обработана
+    }
+    console.error('Ошибка при проверке транзакции:', error.message);
+    return false;
+  }
+
+  return !!data; // true, если транзакция уже есть
+};
+
 const handleTransaction = async (telegram_id, amountTON, tx_hash) => {
+  // Проверяем, обработана ли уже транзакция
+  if (await isTxProcessed(tx_hash)) {
+    console.log(`Транзакция ${tx_hash} уже обработана, пропускаем начисление`);
+    return;
+  }
+
   const { data: userData, error: userError } = await supabase
     .from('users')
     .select('*')
