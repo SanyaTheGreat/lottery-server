@@ -36,13 +36,17 @@ def send_welcome(message):
             existing = supabase.from_('users').select('id, referred_by').eq('telegram_id', user.id).single().execute()
 
             if existing.data and existing.data['referred_by'] is None:
-                ref = supabase.from_('users').select('id').eq('telegram_id', ref_id).single().execute()
+                # В telebot user нет photo_url, поэтому оставляем avatar_url None
+                avatar_url = None
 
-                if ref.data:
-                    supabase.from_('users').update({'referred_by': ref.data['id']}).eq('telegram_id', user.id).execute()
-                    print(f"✅ Привязка успешна: {user.id} → {ref_id}")
-                else:
-                    print(f"⚠️ Реферер с ID {ref_id} не найден")
+                # Добавляем или обновляем запись в pending_referrals
+                supabase.from_('pending_referrals').upsert({
+                    'telegram_id': user.id,
+                    'ref_id': int(ref_id),
+                    'avatar_url': avatar_url
+                }).execute()
+
+                print(f"✅ Добавлено в pending_referrals: {user.id} → {ref_id}")
             else:
                 print("ℹ️ Пользователь уже имеет referred_by или не зарегистрирован")
 

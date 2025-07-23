@@ -65,6 +65,33 @@ const addUser = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 
+  // После вставки пользователя проверяем наличие отложенных рефералов
+  try {
+    const { data: pendingRef, error: pendingError } = await supabase
+      .from('pending_referrals')
+      .select('*')
+      .eq('telegram_id', telegram_id)
+      .single();
+
+    if (!pendingError && pendingRef) {
+      // Обновляем поле referred_by у пользователя
+      await supabase
+        .from('users')
+        .update({ referred_by: pendingRef.referrer_id })
+        .eq('telegram_id', telegram_id);
+
+      // Удаляем запись из pending_referrals
+      await supabase
+        .from('pending_referrals')
+        .delete()
+        .eq('telegram_id', telegram_id);
+
+      console.log(`✅ Связь с реферером из pending_referrals установлена для пользователя ${telegram_id}`);
+    }
+  } catch (e) {
+    console.error("❌ Ошибка при обработке pending_referrals:", e.message);
+  }
+
   res.status(201).json({
     message: 'User registered',
     user: data?.[0] || null,
