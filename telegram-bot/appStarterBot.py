@@ -1,24 +1,18 @@
-import os
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from supabase import create_client, Client
 
-# 🔐 Получаем токен Telegram-бота из переменной окружения
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("Ошибка: BOT_TOKEN не установлен в переменных окружения")
+# 🔐 Укажи токен своего Telegram-бота
+BOT_TOKEN = "7737729183:AAEkmSIEiO0QG0tmkGzKde3wpMuiIVg5KKY"  # ← заменишь на свой
 
-# ✅ Получаем конфиг Supabase из переменных окружения
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# ✅ Supabase конфиг
+SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGNmdHlxa3d1Y2Jrc2tuc2R1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NDY3MTg4MiwiZXhwIjoyMDYwMjQ3ODgyfQ.oSMAenP7WqL19Fl8fhwx7WfwKMG4us-KQ6d_XbpIJSw"  # или anon key, если разрешено
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Ошибка: SUPABASE_URL и SUPABASE_KEY должны быть установлены в переменных окружения")
+# 🌐 Ссылка на твой Mini App (frontend на Vercel)
+WEBAPP_URL = "https://frontend-nine-sigma-49.vercel.app/"
 
-# 🌐 Ссылка на Mini App (frontend на Vercel)
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://frontend-nine-sigma-49.vercel.app/")
 
-# Инициализация клиента Supabase и бота
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -30,30 +24,26 @@ def send_welcome(message):
 
     print(f"🟢 /start от {user.id} ({user.username}) | ref_id: {ref_id}")
 
-    # Если передан ref_id и он не равен себе
+    # 🎯 Если передан ref_id и он не равен себе
     if ref_id and str(user.id) != str(ref_id):
         try:
             existing = supabase.from_('users').select('id, referred_by').eq('telegram_id', user.id).single().execute()
 
             if existing.data and existing.data['referred_by'] is None:
-                # В telebot user нет photo_url, поэтому оставляем avatar_url None
-                avatar_url = None
+                ref = supabase.from_('users').select('id').eq('telegram_id', ref_id).single().execute()
 
-                # Добавляем или обновляем запись в pending_referrals
-                supabase.from_('pending_referrals').upsert({
-                    'telegram_id': user.id,
-                    'ref_id': int(ref_id),
-                    'avatar_url': avatar_url
-                }).execute()
-
-                print(f"✅ Добавлено в pending_referrals: {user.id} → {ref_id}")
+                if ref.data:
+                    supabase.from_('users').update({'referred_by': ref.data['id']}).eq('telegram_id', user.id).execute()
+                    print(f"✅ Привязка успешна: {user.id} → {ref_id}")
+                else:
+                    print(f"⚠️ Реферер с ID {ref_id} не найден")
             else:
                 print("ℹ️ Пользователь уже имеет referred_by или не зарегистрирован")
 
         except Exception as e:
             print(f"❌ Ошибка при сохранении реферала: {e}")
 
-    # Кнопка открытия Mini App на весь экран
+    # 🔘 Кнопка открытия Mini App на весь экран
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
         InlineKeyboardButton(
@@ -68,6 +58,7 @@ def send_welcome(message):
         reply_markup=keyboard
     )
 
+
 if __name__ == "__main__":
     print("🚀 AppStarterBot запущен и ждёт /start")
-    bot.infinity_polling()
+    bot.infinity_polling() 
