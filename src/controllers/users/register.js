@@ -9,7 +9,7 @@ function toBase64Url(base64) {
 const addUser = async (req, res) => {
   console.log('📥 [backend] Получен запрос на /users/register');
 
-  const { telegram_id, username, wallet, referrer_id } = req.body;
+  const { telegram_id, username, wallet, referrer_id, avatar_url } = req.body;
 
   if (!telegram_id || !username) {
     return res.status(400).json({ error: 'Username and Telegram ID are required' });
@@ -52,6 +52,7 @@ const addUser = async (req, res) => {
     wallet: wallet || null,
     tickets: 0,
     payload,
+    avatar_url: avatar_url || null,
     ...(referred_by && { referred_by }),
   };
 
