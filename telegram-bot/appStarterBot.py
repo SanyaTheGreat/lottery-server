@@ -29,24 +29,19 @@ def send_welcome(message):
 
     print(f"🟢 /start от {user.id} ({user.username}) | ref_id: {ref_id}")
 
-    # 🎯 Если передан ref_id и он не равен себе
+    # 🎯 Если передан ref_id и он не равен себе, добавляем в pending_referrals
     if ref_id and str(user.id) != str(ref_id):
         try:
-            existing = supabase.from_('users').select('id, referred_by').eq('telegram_id', user.id).single().execute()
+            # Добавляем или обновляем запись в pending_referrals
+            supabase.from_('pending_referrals').upsert({
+                'referred_id': user.id,
+                'referrer_id': int(ref_id)
+            }).execute()
 
-            if existing.data and existing.data['referred_by'] is None:
-                ref = supabase.from_('users').select('id').eq('telegram_id', ref_id).single().execute()
-
-                if ref.data:
-                    supabase.from_('users').update({'referred_by': ref.data['id']}).eq('telegram_id', user.id).execute()
-                    print(f"✅ Привязка успешна: {user.id} → {ref_id}")
-                else:
-                    print(f"⚠️ Реферер с ID {ref_id} не найден")
-            else:
-                print("ℹ️ Пользователь уже имеет referred_by или не зарегистрирован")
+            print(f"✅ Добавлено в pending_referrals: referred_id={user.id}, referrer_id={ref_id}")
 
         except Exception as e:
-            print(f"❌ Ошибка при сохранении реферала: {e}")
+            print(f"❌ Ошибка при добавлении в pending_referrals: {e}")
 
     # 🔘 Кнопка открытия Mini App на весь экран
     keyboard = InlineKeyboardMarkup()
