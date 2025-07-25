@@ -7,3 +7,4 @@ export { default as register } from './register.js';
 export { default as createSell } from './sell.js';
 export { default as getTicketPurchases } from './getTicketPurchases.js'
 export { default as handleTransaction } from './processPurchase.js';
+export { default as withdrawReferral } from './withdrawReferral.js';

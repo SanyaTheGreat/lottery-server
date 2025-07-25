@@ -6,7 +6,8 @@ import {
   getProfile,
   getReferrals,
   createSell,
-  getTicketPurchases
+  getTicketPurchases,
+  withdrawReferral
 } from '../controllers/users/index.js';
 // import { getAllUsers } from '../controllers/usersController.js'; // опционально
 
@@ -19,6 +20,7 @@ router.patch('/wallet', updateWallet);
 router.post('/buy-tickets', buyTickets);
 router.get('/profile/:telegram_id', getProfile);
 router.get('/referrals/:telegram_id', getReferrals);
+router.post('/withdraw', withdrawReferral);
 
 
 
