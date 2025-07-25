@@ -2,18 +2,23 @@ import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
 import * as tonCrypto from 'ton-crypto';
 
+console.log('tonCrypto exports:', Object.keys(tonCrypto)); // Временный лог для проверки доступных функций
+
 const { TonClient, WalletContractV4, toNano } = pkg;
 
 // Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
-  if (!seedPhrase) throw new Error('TON_SEED_PHRASE is not set in environment variables');
+  if (!seedPhrase) {
+    throw new Error('TON_SEED_PHRASE is not set in environment variables');
+  }
   const seedWords = seedPhrase.split(' ');
 
   // Явно передаём пустую строку как salt (password)
   const seedBuffer = await tonCrypto.mnemonicToSeed(seedWords, '');
 
-  const keyPair = tonCrypto.generateKeyPairFromSeed(seedBuffer.slice(0, 32));
+  // Используем keyPairFromSeed вместо generateKeyPairFromSeed
+  const keyPair = tonCrypto.keyPairFromSeed(seedBuffer.slice(0, 32));
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
@@ -30,7 +35,6 @@ async function initProjectWallet() {
 
   return wallet;
 }
-
 
 // Отправка TON с кошелька проекта на адрес получателя
 async function sendTonTransaction(wallet, toAddress, amount) {
