@@ -3,7 +3,8 @@ import pkg from 'ton';
 import tonCryptoPkg from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
-const { mnemonicToKeyPair } = tonCryptoPkg;
+const mnemonicToKeyPair = tonCryptoPkg.mnemonicToKeyPair || tonCryptoPkg.default?.mnemonicToKeyPair;
+
 
 
 
