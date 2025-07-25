@@ -1,8 +1,11 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
-import { mnemonicToKeyPair } from 'ton-crypto';
+import tonCryptoPkg from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
+const { mnemonicToKeyPair } = tonCryptoPkg;
+
+
 
 // Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
