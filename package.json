@@ -23,6 +23,7 @@
     "express": "^5.1.0",
     "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
-    "ton": "^13.9.0"
+    "ton": "^13.9.0",
+    "ton-crypto": "^3.2.0"
   }
 }

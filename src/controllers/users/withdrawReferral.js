@@ -1,10 +1,10 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
-import { mnemonicToWalletKey } from 'ton/dist/mnemonic';
+import { mnemonicToKeyPair } from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
 
-// Функция инициализации кошелька проекта на базе seed-фразы
+// Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
   if (!seedPhrase) {
@@ -12,12 +12,12 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Создаём ключи из seed-фразы
-  const walletKey = await mnemonicToWalletKey(seedWords);
+  // Получаем ключи из seed фразы
+  const walletKey = await mnemonicToKeyPair(seedWords);
 
   const client = new TonClient({
-    endpoint: 'https://toncenter.com/api/v2/jsonRPC', // или свой RPC
-    apiKey: process.env.TON_API_KEY || '', // если нужен ключ API
+    endpoint: 'https://toncenter.com/api/v2/jsonRPC',
+    apiKey: process.env.TON_API_KEY || '',
   });
 
   const wallet = new WalletContractV4({
@@ -31,17 +31,15 @@ async function initProjectWallet() {
   return wallet;
 }
 
-// Функция отправки TON
+// Отправка TON с кошелька проекта на адрес получателя
 async function sendTonTransaction(wallet, toAddress, amount) {
-  const nanoAmount = toNano(amount.toString()); // перевод в нанотонны
+  const nanoAmount = toNano(amount.toString());
 
-  // Проверяем баланс кошелька проекта
   const balance = await wallet.getBalance();
   if (balance.lt(nanoAmount)) {
     throw new Error('Insufficient project wallet balance');
   }
 
-  // Создаём и отправляем транзакцию
   const seqno = await wallet.getSeqNo();
 
   const transfer = wallet.createTransfer({
@@ -62,6 +60,7 @@ async function sendTonTransaction(wallet, toAddress, amount) {
   return true;
 }
 
+// Контроллер вывода реферальных средств
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
 
@@ -70,7 +69,6 @@ const withdrawReferral = async (req, res) => {
   }
 
   try {
-    // Получаем реферальный баланс пользователя
     const { data: user, error } = await supabase
       .from('users')
       .select('referral_earnings')
@@ -85,13 +83,10 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Insufficient referral balance' });
     }
 
-    // Инициализируем кошелёк проекта
     const projectWallet = await initProjectWallet();
 
-    // Отправляем TON
     await sendTonTransaction(projectWallet, toAddress, amount);
 
-    // После успешной отправки — уменьшаем баланс реферальных начислений
     const { error: updateError } = await supabase
       .from('users')
       .update({ referral_earnings: user.referral_earnings - amount })
