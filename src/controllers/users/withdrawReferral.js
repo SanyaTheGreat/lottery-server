@@ -7,14 +7,12 @@ const { TonClient, WalletContractV4, toNano } = pkg;
 // Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
-  if (!seedPhrase) {
-    throw new Error('TON_SEED_PHRASE is not set in environment variables');
-  }
+  if (!seedPhrase) throw new Error('TON_SEED_PHRASE is not set in environment variables');
   const seedWords = seedPhrase.split(' ');
 
-  // Конвертация seed-фразы в seed buffer
-  const seedBuffer = await tonCrypto.mnemonicToSeed(seedWords);
-  // Генерация ключей из seed (берём первые 32 байта)
+  // Явно передаём пустую строку как salt (password)
+  const seedBuffer = await tonCrypto.mnemonicToSeed(seedWords, '');
+
   const keyPair = tonCrypto.generateKeyPairFromSeed(seedBuffer.slice(0, 32));
 
   const client = new TonClient({
@@ -32,6 +30,7 @@ async function initProjectWallet() {
 
   return wallet;
 }
+
 
 // Отправка TON с кошелька проекта на адрес получателя
 async function sendTonTransaction(wallet, toAddress, amount) {
