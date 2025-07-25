@@ -1,5 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
+import * as tonCrypto from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
 
@@ -11,14 +12,10 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Динамический импорт ton-crypto
-  const tonCryptoPkg = await import('ton-crypto');
-  const mnemonicToKeyPair = tonCryptoPkg.mnemonicToKeyPair || tonCryptoPkg.default?.mnemonicToKeyPair;
-  if (typeof mnemonicToKeyPair !== 'function') {
-    throw new Error('mnemonicToKeyPair function not found in ton-crypto package');
-  }
-
-  const walletKey = await mnemonicToKeyPair(seedWords);
+  // Конвертация seed-фразы в seed buffer
+  const seedBuffer = await tonCrypto.mnemonicToSeed(seedWords);
+  // Генерация ключей из seed (берём первые 32 байта)
+  const keyPair = tonCrypto.generateKeyPairFromSeed(seedBuffer.slice(0, 32));
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
@@ -28,9 +25,9 @@ async function initProjectWallet() {
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
-    publicKey: walletKey.publicKey,
+    publicKey: keyPair.publicKey,
     walletId: 0,
-    secretKey: walletKey.secretKey,
+    secretKey: keyPair.secretKey,
   });
 
   return wallet;
