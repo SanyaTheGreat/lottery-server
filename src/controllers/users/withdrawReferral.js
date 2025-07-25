@@ -2,11 +2,8 @@ import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
 import * as tonCrypto from 'ton-crypto';
 
-console.log('tonCrypto exports:', Object.keys(tonCrypto)); // Временный лог для проверки доступных функций
-
 const { TonClient, WalletContractV4, toNano } = pkg;
 
-// Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
   if (!seedPhrase) {
@@ -14,11 +11,8 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Явно передаём пустую строку как salt (password)
-  const seedBuffer = await tonCrypto.mnemonicToSeed(seedWords, '');
-
-  // Используем keyPairFromSeed вместо generateKeyPairFromSeed
-  const keyPair = tonCrypto.keyPairFromSeed(seedBuffer.slice(0, 32));
+  // Генерация ключей кошелька из seed-фразы
+  const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
@@ -28,15 +22,14 @@ async function initProjectWallet() {
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
-    publicKey: keyPair.publicKey,
+    publicKey: walletKey.publicKey,
     walletId: 0,
-    secretKey: keyPair.secretKey,
+    secretKey: walletKey.secretKey,
   });
 
   return wallet;
 }
 
-// Отправка TON с кошелька проекта на адрес получателя
 async function sendTonTransaction(wallet, toAddress, amount) {
   const nanoAmount = toNano(amount.toString());
 
@@ -65,7 +58,6 @@ async function sendTonTransaction(wallet, toAddress, amount) {
   return true;
 }
 
-// Контроллер вывода реферальных средств
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
 
