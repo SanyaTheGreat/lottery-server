@@ -23,7 +23,7 @@ async function initProjectWallet() {
     client,
     workchain: 0,
     publicKey: walletKey.publicKey,
-    walletId: 0,
+    walletId: 0n,
     secretKey: walletKey.secretKey,
   });
 
