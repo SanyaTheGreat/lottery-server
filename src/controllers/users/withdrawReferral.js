@@ -1,5 +1,7 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { TonClient, WalletContractV4, KeyPair, toNano } from 'ton';
+import pkg from 'ton';
+const { TonClient, WalletContractV4, KeyPair, toNano } = pkg;
+
 
 // Функция инициализации кошелька проекта на базе seed-фразы
 async function initProjectWallet() {
