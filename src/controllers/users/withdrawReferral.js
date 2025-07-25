@@ -1,8 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
-import bip39 from 'bip39';
+import { mnemonicToWalletKey } from 'ton/dist/mnemonic';
 
-const { TonClient, WalletContractV4, KeyPair, toNano } = pkg;
+const { TonClient, WalletContractV4, toNano } = pkg;
 
 // Функция инициализации кошелька проекта на базе seed-фразы
 async function initProjectWallet() {
@@ -12,11 +12,8 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Конвертация seed-фразы в seed (32 байта)
-  const seedBuffer = await bip39.mnemonicToSeed(seedWords.join(' '));
-  const seed = seedBuffer.slice(0, 32);
-
-  const keyPair = KeyPair.fromSeed(seed);
+  // Создаём ключи из seed-фразы
+  const walletKey = await mnemonicToWalletKey(seedWords);
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC', // или свой RPC
@@ -26,9 +23,9 @@ async function initProjectWallet() {
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
-    publicKey: keyPair.publicKey,
+    publicKey: walletKey.publicKey,
     walletId: 0,
-    secretKey: keyPair.secretKey,
+    secretKey: walletKey.secretKey,
   });
 
   return wallet;
@@ -62,7 +59,7 @@ async function sendTonTransaction(wallet, toAddress, amount) {
 
   await wallet.client.sendExternalMessage(wallet.address, transfer);
 
-  return true; // можно расширить, например, вернуть хэш транзакции
+  return true;
 }
 
 const withdrawReferral = async (req, res) => {
