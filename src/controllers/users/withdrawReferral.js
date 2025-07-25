@@ -1,7 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
-const { TonClient, WalletContractV4, KeyPair, toNano } = pkg;
+import bip39 from 'bip39';
 
+const { TonClient, WalletContractV4, KeyPair, toNano } = pkg;
 
 // Функция инициализации кошелька проекта на базе seed-фразы
 async function initProjectWallet() {
@@ -12,7 +13,6 @@ async function initProjectWallet() {
   const seedWords = seedPhrase.split(' ');
 
   // Конвертация seed-фразы в seed (32 байта)
-  const bip39 = await import('bip39');
   const seedBuffer = await bip39.mnemonicToSeed(seedWords.join(' '));
   const seed = seedBuffer.slice(0, 32);
 
