@@ -3,10 +3,8 @@ import pkg from 'ton';
 import tonCryptoPkg from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
+// Правильный импорт функции из CommonJS-пакета
 const mnemonicToKeyPair = tonCryptoPkg.mnemonicToKeyPair || tonCryptoPkg.default?.mnemonicToKeyPair;
-
-
-
 
 // Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
