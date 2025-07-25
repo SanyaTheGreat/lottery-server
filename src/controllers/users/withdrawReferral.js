@@ -1,9 +1,7 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from 'ton';
-import * as tonCrypto from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
-const { mnemonicToKeyPair } = tonCrypto;
 
 // Инициализация кошелька проекта на основе seed-фразы из env
 async function initProjectWallet() {
@@ -13,7 +11,13 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Получаем ключи из seed фразы
+  // Динамический импорт ton-crypto
+  const tonCryptoPkg = await import('ton-crypto');
+  const mnemonicToKeyPair = tonCryptoPkg.mnemonicToKeyPair || tonCryptoPkg.default?.mnemonicToKeyPair;
+  if (typeof mnemonicToKeyPair !== 'function') {
+    throw new Error('mnemonicToKeyPair function not found in ton-crypto package');
+  }
+
   const walletKey = await mnemonicToKeyPair(seedWords);
 
   const client = new TonClient({
