@@ -1,14 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
+import { sendTon } from '../../utils/tonSender.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_KEY
 );
 
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet, amount } = req.body;
 
-  // Проверка входных данных
   if (!telegram_id || !wallet || !amount) {
     return res.status(400).json({ error: 'Недостаточно данных для запроса' });
   }
@@ -18,7 +18,7 @@ const withdrawReferral = async (req, res) => {
   }
 
   try {
-    // Получаем пользователя по telegram_id
+    // Получение пользователя
     const { data: user, error } = await supabase
       .from('users')
       .select('referral_earnings')
@@ -33,9 +33,12 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно средств для вывода' });
     }
 
+    // Отправка TON через Toncenter API
+    await sendTon(wallet, amount);
+
     const newBalance = user.referral_earnings - amount;
 
-    // Обновляем баланс в Supabase
+    // Обновление баланса
     const { error: updateError } = await supabase
       .from('users')
       .update({ referral_earnings: newBalance })
@@ -45,9 +48,6 @@ const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Ошибка при обновлении баланса' });
     }
 
-    // Пока что просто логируем успешный вывод (реальная отправка позже)
-    console.log(`✅ Вывод ${amount} TON на кошелёк ${wallet}`);
-
     return res.status(200).json({
       success: true,
       message: `Успешно отправлено ${amount} TON`,
@@ -55,8 +55,8 @@ const withdrawReferral = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Ошибка обработки запроса на вывод:', err);
-    return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+    console.error('Ошибка при выводе TON:', err);
+    return res.status(500).json({ error: 'Ошибка отправки TON или сервера' });
   }
 };
 
