@@ -21,9 +21,7 @@ async function initProjectWallet() {
 
   // walletId с типом bigint
   const walletId = 0n;
-  
-  console.log('typeof walletId:', typeof walletId);
-  console.log('walletId:', walletId);
+  console.log('walletId (as bigint):', walletId, 'type:', typeof walletId);
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
@@ -38,12 +36,12 @@ async function initProjectWallet() {
     walletId: walletId,
   });
 
-  // Возвращаем и wallet, и walletKey (секретный ключ пригодится позже)
   return { wallet, walletKey };
 }
 
 async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   const nanoAmount = toNano(amount.toString());
+  console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
 
   const balance = await wallet.getBalance();
   if (balance.lt(nanoAmount)) {
@@ -51,6 +49,7 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   }
 
   const seqno = await wallet.getSeqNo();
+  console.log('seqno:', seqno, 'typeof seqno:', typeof seqno);
 
   const transfer = wallet.createTransfer({
     secretKey: walletKey.secretKey, // Передаем secretKey здесь
