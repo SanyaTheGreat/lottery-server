@@ -24,7 +24,9 @@ async function loadWalletCode() {
 
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
-  if (!seedPhrase) throw new Error('TON_SEED_PHRASE is not set in environment variables');
+  if (!seedPhrase) {
+    throw new Error('TON_SEED_PHRASE is not set in environment variables');
+  }
   const seedWords = seedPhrase.split(' ');
 
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
@@ -37,7 +39,9 @@ async function initProjectWallet() {
   const walletCode = await loadWalletCode();
 
   const walletAddressStr = process.env.PROJECT_WALLET_ADDRESS;
-  if (!walletAddressStr) throw new Error('PROJECT_WALLET_ADDRESS is not set in environment variables');
+  if (!walletAddressStr) {
+    throw new Error('PROJECT_WALLET_ADDRESS is not set in environment variables');
+  }
   const walletAddress = Address.parseFriendly(walletAddressStr).address;
 
   const walletConfig = {
@@ -47,10 +51,10 @@ async function initProjectWallet() {
     publicKey: walletKey.publicKey,
     extensions: new Map(),
   };
+  const walletData = walletV5ConfigToCell(walletConfig);
+  const init = { code: walletCode, data: walletData };
 
-  const init = { code: walletCode, data: walletV5ConfigToCell(walletConfig) };
   const wallet = new WalletV5(walletAddress, init);
-
   wallet.client = client;
 
   console.log('Initialized project wallet address:', wallet.address.toString());
@@ -66,9 +70,11 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const balanceNano = BigInt(balanceNanoStr);
   console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
 
-  if (balanceNano < nanoAmount) throw new Error('Insufficient project wallet balance');
+  if (balanceNano < nanoAmount) {
+    throw new Error('Insufficient project wallet balance');
+  }
 
-  const provider = await wallet.client.provider(wallet.address);
+  const provider = wallet.client.provider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
   console.log('Current wallet seqno:', seqno);
 
@@ -97,8 +103,9 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
 
-  if (!telegram_id || !toAddress || !amount || amount <= 0)
+  if (!telegram_id || !toAddress || !amount || amount <= 0) {
     return res.status(400).json({ error: 'telegram_id, wallet and positive amount are required' });
+  }
 
   try {
     const { data: user, error } = await supabase
@@ -107,8 +114,13 @@ const withdrawReferral = async (req, res) => {
       .eq('telegram_id', telegram_id)
       .single();
 
-    if (error || !user) return res.status(404).json({ error: 'User not found' });
-    if (user.referral_earnings < amount) return res.status(400).json({ error: 'Insufficient referral balance' });
+    if (error || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.referral_earnings < amount) {
+      return res.status(400).json({ error: 'Insufficient referral balance' });
+    }
 
     const { wallet, walletKey } = await initProjectWallet();
 
@@ -119,7 +131,9 @@ const withdrawReferral = async (req, res) => {
       .update({ referral_earnings: user.referral_earnings - amount })
       .eq('telegram_id', telegram_id);
 
-    if (updateError) return res.status(500).json({ error: 'Failed to update referral earnings' });
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to update referral earnings' });
+    }
 
     return res.json({ message: 'Withdrawal successful' });
   } catch (e) {
