@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { mnemonicToPrivateKey } from '@ton/crypto';
-import { WalletContractV4, internal, TonClient, toNano } from '@ton/ton';
+import { WalletContractV5R1, internal, TonClient, toNano } from '@ton/ton';
 import { getHttpEndpoint } from '@orbs-network/ton-access';
 
 const TON_SEED_PHRASE = process.env.TON_SEED_PHRASE;
@@ -18,7 +18,7 @@ export async function sendTon(toAddress, amountTon) {
   const endpoint = await getHttpEndpoint();
   const client = new TonClient({ endpoint });
 
-  const wallet = WalletContractV4.create({
+  const wallet = WalletContractV5R1.create({
     workchain: 0,
     publicKey: keyPair.publicKey,
   });
