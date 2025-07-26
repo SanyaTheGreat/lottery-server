@@ -28,25 +28,15 @@ async function initProjectWallet() {
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  try {
-    const wallet = new WalletContractV4({
-      client,
-      workchain: 0,
-      publicKey: walletKey.publicKey,
-      walletId: walletId,
-    });
+  // Убираем secretKey из конструктора!
+  const wallet = new WalletContractV4({
+    client,
+    workchain: 0,
+    publicKey: walletKey.publicKey,
+    walletId: walletId,
+  });
 
-    console.log('WalletContractV4 instance created successfully');
-    return { wallet, walletKey };
-  } catch (e) {
-    console.error('Error creating WalletContractV4:', e);
-    console.log('Parameters at error time:');
-    console.log('client:', client);
-    console.log('workchain:', 0);
-    console.log('publicKey (type, length):', typeof walletKey.publicKey, walletKey.publicKey.length);
-    console.log('walletId (value, type):', walletId, typeof walletId);
-    throw e;
-  }
+  return { wallet, walletKey };
 }
 
 async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
@@ -54,7 +44,6 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
 
   const balance = await wallet.getBalance();
-  console.log('Wallet balance:', balance.toString());
   if (balance.lt(nanoAmount)) {
     throw new Error('Insufficient project wallet balance');
   }
@@ -82,6 +71,9 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
 
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
+
+  // Логируем входящие параметры запроса
+  console.log('Withdraw request:', { telegram_id, toAddress, amount });
 
   if (!telegram_id || !toAddress || !amount || amount <= 0) {
     return res.status(400).json({ error: 'telegram_id, wallet and positive amount are required' });
