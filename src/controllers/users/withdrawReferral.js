@@ -1,7 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
-import { Cell, Address, walletV5ConfigToCell, WalletV5 } from './wallet-v5.js';
+import { Cell, Address } from '@ton/core';
+import { walletV5ConfigToCell, WalletV5 } from './wallet-v5.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,7 +12,6 @@ const { TonClient, toNano, fromNano } = pkg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Загружаем байткод контракта WalletV5 из base64 файла
 async function loadWalletCode() {
   const base64Path = path.resolve(__dirname, 'wallet_v5_code.b64');
   console.log('Loading wallet code from:', base64Path);
@@ -31,8 +31,6 @@ async function initProjectWallet() {
 
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
-  const walletId = 0n;
-
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
@@ -40,16 +38,15 @@ async function initProjectWallet() {
 
   const walletCode = await loadWalletCode();
 
-  // Формируем конфиг кошелька
   const walletConfig = {
     signatureAllowed: true,
     seqno: 0,
-    walletId,
+    walletId: 0n,
     publicKey: walletKey.publicKey,
     extensions: new Map(),
   };
 
-  // Создаём кошелёк через createFromConfig (адрес считается автоматически)
+  // Используем createFromConfig для корректного создания кошелька
   const wallet = WalletV5.createFromConfig(walletConfig, walletCode, 0);
 
   wallet.client = client;
@@ -63,6 +60,7 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const nanoAmount = toNano(amount.toString());
   console.log(`Requested transfer amount: ${amount} TON (${nanoAmount.toString()} nano)`);
 
+  // Получаем баланс кошелька через клиента TON напрямую
   const balanceNanoStr = await wallet.client.getBalance(wallet.address);
   const balanceNano = BigInt(balanceNanoStr);
   console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
@@ -71,6 +69,7 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
     throw new Error('Insufficient project wallet balance');
   }
 
+  // Получаем провайдера и seqno
   const provider = await wallet.client.provider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
   console.log('Current wallet seqno:', seqno);
