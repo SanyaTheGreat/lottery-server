@@ -19,7 +19,7 @@ async function initProjectWallet() {
   console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
   console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
-  // Логи для walletId
+  // walletId с типом bigint
   const walletId = 0n;
   console.log('typeof walletId:', typeof walletId);
   console.log('walletId:', walletId);
@@ -29,18 +29,19 @@ async function initProjectWallet() {
     apiKey: process.env.TON_API_KEY || '',
   });
 
+  // Убираем secretKey из конструктора!
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
     publicKey: walletKey.publicKey,
     walletId: walletId,
-    secretKey: walletKey.secretKey,
   });
 
-  return wallet;
+  // Возвращаем и wallet, и walletKey (секретный ключ пригодится позже)
+  return { wallet, walletKey };
 }
 
-async function sendTonTransaction(wallet, toAddress, amount) {
+async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   const nanoAmount = toNano(amount.toString());
 
   const balance = await wallet.getBalance();
@@ -51,7 +52,7 @@ async function sendTonTransaction(wallet, toAddress, amount) {
   const seqno = await wallet.getSeqNo();
 
   const transfer = wallet.createTransfer({
-    secretKey: wallet.secretKey,
+    secretKey: walletKey.secretKey, // Передаем secretKey здесь
     seqno,
     sendMode: 3,
     order: [
@@ -90,9 +91,9 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Insufficient referral balance' });
     }
 
-    const projectWallet = await initProjectWallet();
+    const { wallet, walletKey } = await initProjectWallet();
 
-    await sendTonTransaction(projectWallet, toAddress, amount);
+    await sendTonTransaction(wallet, walletKey, toAddress, amount);
 
     const { error: updateError } = await supabase
       .from('users')
