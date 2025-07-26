@@ -15,7 +15,6 @@ const __dirname = path.dirname(__filename);
 async function loadWalletCode() {
   const base64Path = path.resolve(__dirname, 'wallet_v5_code.b64');
   console.log('Loading wallet code from:', base64Path);
-
   const base64 = await fs.readFile(base64Path, 'utf-8');
   const buffer = Buffer.from(base64, 'base64');
   const cells = Cell.fromBoc(buffer);
@@ -24,11 +23,9 @@ async function loadWalletCode() {
 
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
-  if (!seedPhrase) {
-    throw new Error('TON_SEED_PHRASE is not set in environment variables');
-  }
-  const seedWords = seedPhrase.split(' ');
+  if (!seedPhrase) throw new Error('TON_SEED_PHRASE is not set');
 
+  const seedWords = seedPhrase.split(' ');
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
   const client = new TonClient({
@@ -38,6 +35,11 @@ async function initProjectWallet() {
 
   const walletCode = await loadWalletCode();
 
+  const walletAddressStr = process.env.PROJECT_WALLET_ADDRESS;
+  if (!walletAddressStr) throw new Error('PROJECT_WALLET_ADDRESS is not set');
+
+  const walletAddress = Address.parseFriendly(walletAddressStr).address;
+
   const walletConfig = {
     signatureAllowed: true,
     seqno: 0,
@@ -45,10 +47,9 @@ async function initProjectWallet() {
     publicKey: walletKey.publicKey,
     extensions: new Map(),
   };
+  const init = { code: walletCode, data: walletV5ConfigToCell(walletConfig) };
 
-  // Используем createFromConfig для корректного создания кошелька
-  const wallet = WalletV5.createFromConfig(walletConfig, walletCode, 0);
-
+  const wallet = new WalletV5(walletAddress, init);
   wallet.client = client;
 
   console.log('Initialized project wallet address:', wallet.address.toString());
@@ -60,16 +61,12 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const nanoAmount = toNano(amount.toString());
   console.log(`Requested transfer amount: ${amount} TON (${nanoAmount.toString()} nano)`);
 
-  // Получаем баланс кошелька через клиента TON напрямую
   const balanceNanoStr = await wallet.client.getBalance(wallet.address);
   const balanceNano = BigInt(balanceNanoStr);
   console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
 
-  if (balanceNano < nanoAmount) {
-    throw new Error('Insufficient project wallet balance');
-  }
+  if (balanceNano < nanoAmount) throw new Error('Insufficient project wallet balance');
 
-  // Получаем провайдера и seqno
   const provider = await wallet.client.provider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
   console.log('Current wallet seqno:', seqno);
@@ -80,19 +77,11 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
     secretKey: walletKey.secretKey,
     seqno,
     sendMode: 3,
-    order: [
-      {
-        amount: nanoAmount,
-        address: toAddress,
-        payload: null,
-      },
-    ],
+    order: [{ amount: nanoAmount, address: toAddress, payload: null }],
   });
 
   console.log('Sending transfer message...');
-
   await provider.external(transfer);
-
   console.log('Transfer sent successfully');
 
   return true;
@@ -112,16 +101,11 @@ const withdrawReferral = async (req, res) => {
       .eq('telegram_id', telegram_id)
       .single();
 
-    if (error || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    if (error || !user) return res.status(404).json({ error: 'User not found' });
 
-    if (user.referral_earnings < amount) {
-      return res.status(400).json({ error: 'Insufficient referral balance' });
-    }
+    if (user.referral_earnings < amount) return res.status(400).json({ error: 'Insufficient referral balance' });
 
     const { wallet, walletKey } = await initProjectWallet();
-
     await sendTonTransaction(wallet, walletKey, toAddress, amount);
 
     const { error: updateError } = await supabase
@@ -129,9 +113,7 @@ const withdrawReferral = async (req, res) => {
       .update({ referral_earnings: user.referral_earnings - amount })
       .eq('telegram_id', telegram_id);
 
-    if (updateError) {
-      return res.status(500).json({ error: 'Failed to update referral earnings' });
-    }
+    if (updateError) return res.status(500).json({ error: 'Failed to update referral earnings' });
 
     return res.json({ message: 'Withdrawal successful' });
   } catch (e) {
