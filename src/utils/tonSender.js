@@ -1,17 +1,12 @@
 import axios from 'axios';
 import { mnemonicToPrivateKey } from '@ton/crypto';
-import { WalletContractV4, internal, TonClient } from '@ton/ton';
+import { WalletContractV4, internal, TonClient, toNano } from '@ton/ton';
 import { getHttpEndpoint } from '@orbs-network/ton-access';
 
 const TON_SEED_PHRASE = process.env.TON_SEED_PHRASE;
 const TON_API_KEY = process.env.TON_API_KEY;
-const MIN_GAS_TON = 0.03; // резерв для комиссии
+const MIN_GAS_TON = 0.03;
 
-/**
- * Отправляет указанную сумму TON на адрес получателя
- * @param {string} toAddress - Адрес получателя
- * @param {number} amountTon - Сумма в TON
- */
 export async function sendTon(toAddress, amountTon) {
   if (!TON_SEED_PHRASE || !TON_API_KEY) {
     throw new Error('TON_SEED_PHRASE или TON_API_KEY не указаны в .env');
@@ -20,7 +15,7 @@ export async function sendTon(toAddress, amountTon) {
   const mnemonicArray = TON_SEED_PHRASE.trim().split(/\s+/);
   const keyPair = await mnemonicToPrivateKey(mnemonicArray);
 
-  const endpoint = await getHttpEndpoint(); // Получаем актуальный endpoint
+  const endpoint = await getHttpEndpoint();
   const client = new TonClient({ endpoint });
 
   const wallet = WalletContractV4.create({
@@ -43,7 +38,7 @@ export async function sendTon(toAddress, amountTon) {
     messages: [
       internal({
         to: toAddress,
-        value: tonToSend.toFixed(9) + ' TON',
+        value: toNano(tonToSend), // ✅ без строки, только число
         body: 'Referral withdrawal',
       }),
     ],
