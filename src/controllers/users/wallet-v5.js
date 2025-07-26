@@ -1,12 +1,7 @@
-const {
-  Address,
-  beginCell,
-  Dictionary,
-  contractAddress
-} = require('@ton/core');
-const { sign } = require('@ton/crypto');
+import { Address, beginCell, Dictionary, contractAddress } from '@ton/core';
+import { sign } from '@ton/crypto';
 
-function walletV5ConfigToCell(config) {
+export function walletV5ConfigToCell(config) {
   return beginCell()
     .storeBit(config.signatureAllowed)
     .storeUint(config.seqno, 32)
@@ -16,7 +11,7 @@ function walletV5ConfigToCell(config) {
     .endCell();
 }
 
-const Opcodes = {
+export const Opcodes = {
   action_send_msg: 0x0ec3c86d,
   action_set_code: 0xad4de08e,
   action_extended_set_data: 0x1ff8ea0b,
@@ -28,7 +23,7 @@ const Opcodes = {
   auth_signed_internal: 0x73696e74
 };
 
-class WalletId {
+export class WalletId {
   static versionsSerialisation = { v5: 0 };
 
   static deserialize(walletId) {
@@ -46,7 +41,7 @@ class WalletId {
   }
 }
 
-class WalletV5 {
+export class WalletV5 {
   constructor(address, init) {
     this.address = address;
     this.init = init;
@@ -119,10 +114,3 @@ class WalletV5 {
     });
   }
 }
-
-module.exports = {
-  walletV5ConfigToCell,
-  Opcodes,
-  WalletId,
-  WalletV5
-};

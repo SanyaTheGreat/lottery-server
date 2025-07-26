@@ -2,7 +2,7 @@ import { supabase } from '../../services/supabaseClient.js';
 import pkg from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
 import { Cell, Address } from '@ton/core';
-import { WalletV5 } from './wallet-v5.js'; // путь к wallet-v5.js
+import { WalletV5, walletV5ConfigToCell } from './wallet-v5.js';
 import fs from 'fs/promises';
 
 const { TonClient, toNano } = pkg;
