@@ -1,17 +1,31 @@
 import { Address, beginCell, Dictionary, contractAddress } from '@ton/core';
 import { sign } from '@ton/crypto';
 
-export function walletV5ConfigToCell(config) {
+function walletV5ConfigToCell(config) {
+  let extensionsDict;
+
+  if (config.extensions instanceof Dictionary) {
+    extensionsDict = config.extensions;
+  } else if (config.extensions instanceof Map) {
+    // Создаём пустой словарь с нужными ключами и значениями
+    extensionsDict = Dictionary.empty(Dictionary.Keys.BigUint(256), Dictionary.Values.BigInt(1));
+    for (const [key, value] of config.extensions) {
+      extensionsDict = extensionsDict.set(key, value);
+    }
+  } else {
+    extensionsDict = Dictionary.empty(Dictionary.Keys.BigUint(256), Dictionary.Values.BigInt(1));
+  }
+
   return beginCell()
     .storeBit(config.signatureAllowed)
     .storeUint(config.seqno, 32)
     .storeUint(config.walletId, 32)
     .storeBuffer(config.publicKey, 32)
-    .storeDict(config.extensions, Dictionary.Keys.BigUint(256), Dictionary.Values.BigInt(1))
+    .storeDict(extensionsDict, Dictionary.Keys.BigUint(256), Dictionary.Values.BigInt(1))
     .endCell();
 }
 
-export const Opcodes = {
+const Opcodes = {
   action_send_msg: 0x0ec3c86d,
   action_set_code: 0xad4de08e,
   action_extended_set_data: 0x1ff8ea0b,
@@ -23,11 +37,10 @@ export const Opcodes = {
   auth_signed_internal: 0x73696e74
 };
 
-export class WalletId {
+class WalletId {
   static versionsSerialisation = { v5: 0 };
 
   static deserialize(walletId) {
-    // В оригинале: сложное чтение из битов, здесь просто subwalletNumber
     return new WalletId({ networkGlobalId: 0, workChain: 0, walletVersion: 'v5', subwalletNumber: Number(walletId) });
   }
 
@@ -41,7 +54,7 @@ export class WalletId {
   }
 }
 
-export class WalletV5 {
+class WalletV5 {
   constructor(address, init) {
     this.address = address;
     this.init = init;
@@ -114,3 +127,10 @@ export class WalletV5 {
     });
   }
 }
+
+export {
+  walletV5ConfigToCell,
+  Opcodes,
+  WalletId,
+  WalletV5
+};
