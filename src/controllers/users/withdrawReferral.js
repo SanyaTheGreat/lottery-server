@@ -1,7 +1,7 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
-import { Cell, Address } from '@ton/core';
+import { Cell, Address, beginCell } from '@ton/core';
 import { WalletV5, walletV5ConfigToCell } from './wallet-v5.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -9,11 +9,9 @@ import { fileURLToPath } from 'url';
 
 const { TonClient, toNano, fromNano } = pkg;
 
-// Получаем текущую директорию файла для корректного чтения wallet_v5_code.b64
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Загружаем байткод контракта WalletV5 из base64 файла
 async function loadWalletCode() {
   const base64Path = path.resolve(__dirname, 'wallet_v5_code.b64');
   console.log('Loading wallet code from:', base64Path);
@@ -33,8 +31,6 @@ async function initProjectWallet() {
 
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
-  const walletId = 0n;
-
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
@@ -42,15 +38,23 @@ async function initProjectWallet() {
 
   const walletCode = await loadWalletCode();
 
+  const walletAddressStr = process.env.PROJECT_WALLET_ADDRESS;
+  if (!walletAddressStr) {
+    throw new Error('PROJECT_WALLET_ADDRESS is not set in environment variables');
+  }
+  const walletAddress = Address.parseFriendly(walletAddressStr).address;
+
+  // Создаём экземпляр WalletV5 с реальным адресом и init (code + data) для возможности создания transfer
+  // Здесь walletCode и walletConfig нужны только для init (если надо)
   const walletConfig = {
     signatureAllowed: true,
     seqno: 0,
-    walletId,
+    walletId: 0n,
     publicKey: walletKey.publicKey,
     extensions: new Map(),
   };
-
-  const wallet = WalletV5.createFromConfig(walletConfig, walletCode, 0);
+  const init = { code: walletCode, data: walletV5ConfigToCell(walletConfig) };
+  const wallet = new WalletV5(walletAddress, init);
 
   wallet.client = client;
 
@@ -72,8 +76,8 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
     throw new Error('Insufficient project wallet balance');
   }
 
-  // Получаем провайдера контракта через client.provider(wallet.address)
-  const provider = await wallet.client.provider(wallet.address);
+  // Получаем провайдера и seqno
+  const provider = await wallet.client.getContractProvider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
   console.log('Current wallet seqno:', seqno);
 
@@ -94,7 +98,6 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
 
   console.log('Sending transfer message...');
 
-  // Отправляем внешнее сообщение через провайдера
   await provider.external(transfer);
 
   console.log('Transfer sent successfully');
