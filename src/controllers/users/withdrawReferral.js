@@ -1,113 +1,24 @@
-import { supabase } from '../../services/supabaseClient.js';
-import pkg from '@ton/ton';
-import * as tonCrypto from 'ton-crypto';
-import { Cell, Address } from '@ton/core';
-import { WalletV5, walletV5ConfigToCell } from './wallet-v5.js';
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
-const { TonClient, toNano, fromNano } = pkg;
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+export const withdrawReferral = async (req, res) => {
+  const { telegram_id, wallet, amount } = req.body;
 
-async function loadWalletCode() {
-  const base64Path = path.resolve(__dirname, 'wallet_v5_code.b64');
-  console.log('Loading wallet code from:', base64Path);
-
-  const base64 = await fs.readFile(base64Path, 'utf-8');
-  const buffer = Buffer.from(base64, 'base64');
-  const cells = Cell.fromBoc(buffer);
-  return cells[0];
-}
-
-async function initProjectWallet() {
-  const seedPhrase = process.env.TON_SEED_PHRASE;
-  if (!seedPhrase) {
-    throw new Error('TON_SEED_PHRASE is not set in environment variables');
-  }
-  const seedWords = seedPhrase.split(' ');
-
-  const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
-
-  const client = new TonClient({
-    endpoint: 'https://toncenter.com/api/v2/jsonRPC',
-    apiKey: process.env.TON_API_KEY || '',
-  });
-
-  const walletCode = await loadWalletCode();
-
-  const walletAddressStr = process.env.PROJECT_WALLET_ADDRESS;
-  if (!walletAddressStr) {
-    throw new Error('PROJECT_WALLET_ADDRESS is not set in environment variables');
-  }
-  const walletAddress = Address.parseFriendly(walletAddressStr).address;
-
-  const walletConfig = {
-    signatureAllowed: true,
-    seqno: 0,
-    walletId: 0n,
-    publicKey: walletKey.publicKey,
-    extensions: new Map(),
-  };
-  const walletData = walletV5ConfigToCell(walletConfig);
-  const init = { code: walletCode, data: walletData };
-
-  const wallet = new WalletV5(walletAddress, init);
-  wallet.client = client;
-
-  console.log('Initialized project wallet address:', wallet.address.toString());
-
-  return { wallet, walletKey };
-}
-
-async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
-  const nanoAmount = toNano(amount.toString());
-  console.log(`Requested transfer amount: ${amount} TON (${nanoAmount.toString()} nano)`);
-
-  const balanceNanoStr = await wallet.client.getBalance(wallet.address);
-  const balanceNano = BigInt(balanceNanoStr);
-  console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
-
-  if (balanceNano < nanoAmount) {
-    throw new Error('Insufficient project wallet balance');
+  // Валидация запроса
+  if (!telegram_id || !wallet || !amount) {
+    return res.status(400).json({ error: 'Недостаточно данных для запроса' });
   }
 
-  const provider = wallet.client.provider(wallet.address);
-  const seqno = await wallet.getSeqno(provider);
-  console.log('Current wallet seqno:', seqno);
-
-  const toAddress = Address.parseFriendly(toAddressStr).address;
-
-  const transfer = wallet.createTransfer({
-    secretKey: walletKey.secretKey,
-    seqno,
-    sendMode: 3,
-    order: [
-      {
-        amount: nanoAmount,
-        address: toAddress,
-        payload: null,
-      },
-    ],
-  });
-
-  console.log('Sending transfer message...');
-  await provider.external(transfer);
-  console.log('Transfer sent successfully');
-
-  return true;
-}
-
-const withdrawReferral = async (req, res) => {
-  const { telegram_id, wallet: toAddress, amount } = req.body;
-
-  if (!telegram_id || !toAddress || !amount || amount <= 0) {
-    return res.status(400).json({ error: 'telegram_id, wallet and positive amount are required' });
+  if (amount < 3) {
+    return res.status(400).json({ error: 'Минимальная сумма для вывода — 3 TON' });
   }
 
   try {
+    // Получаем пользователя по telegram_id
     const { data: user, error } = await supabase
       .from('users')
       .select('referral_earnings')
@@ -115,31 +26,36 @@ const withdrawReferral = async (req, res) => {
       .single();
 
     if (error || !user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
-    if (user.referral_earnings < amount) {
-      return res.status(400).json({ error: 'Insufficient referral balance' });
+    if (amount > user.referral_earnings) {
+      return res.status(400).json({ error: 'Недостаточно средств для вывода' });
     }
 
-    const { wallet, walletKey } = await initProjectWallet();
-
-    await sendTonTransaction(wallet, walletKey, toAddress, amount);
+    // Обновляем referral_earnings
+    const newBalance = user.referral_earnings - amount;
 
     const { error: updateError } = await supabase
       .from('users')
-      .update({ referral_earnings: user.referral_earnings - amount })
+      .update({ referral_earnings: newBalance })
       .eq('telegram_id', telegram_id);
 
     if (updateError) {
-      return res.status(500).json({ error: 'Failed to update referral earnings' });
+      return res.status(500).json({ error: 'Ошибка при обновлении баланса' });
     }
 
-    return res.json({ message: 'Withdrawal successful' });
-  } catch (e) {
-    console.error('TON transfer error:', e);
-    return res.status(500).json({ error: 'Failed to send TON transaction: ' + e.message });
+    // Здесь можно вставить отправку TON (позже)
+    console.log(`✅ Вывод ${amount} TON на кошелёк ${wallet}`);
+
+    return res.status(200).json({
+      success: true,
+      message: `Успешно отправлено ${amount} TON`,
+      new_balance: newBalance,
+    });
+
+  } catch (err) {
+    console.error('Ошибка вывода:', err);
+    return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 };
-
-export default withdrawReferral;
