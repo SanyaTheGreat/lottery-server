@@ -54,6 +54,12 @@ async function initProjectWallet() {
 
   wallet.client = client;
 
+  // Используем адрес из .env
+  const realAddress = process.env.PROJECT_WALLET_ADDRESS;
+  if (realAddress) {
+    wallet.address = Address.parseFriendly(realAddress).address;
+  }
+
   console.log('Initialized project wallet address:', wallet.address.toString());
 
   return { wallet, walletKey };
