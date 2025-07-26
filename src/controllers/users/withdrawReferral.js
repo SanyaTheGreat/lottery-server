@@ -11,19 +11,25 @@ async function initProjectWallet() {
   }
   const seedWords = seedPhrase.split(' ');
 
-  // Генерация ключей кошелька из seed-фразы
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
+
+  console.log('walletKey:', walletKey);
+  console.log('typeof walletKey.publicKey:', typeof walletKey.publicKey);
+  console.log('walletKey.publicKey instanceof Uint8Array:', walletKey.publicKey instanceof Uint8Array);
+  console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
+  console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
   });
 
+  // Используем walletId = 0 (number)
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
     publicKey: walletKey.publicKey,
-    walletId: 0n,
+    walletId: 0,
     secretKey: walletKey.secretKey,
   });
 
