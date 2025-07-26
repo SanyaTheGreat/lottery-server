@@ -28,15 +28,25 @@ async function initProjectWallet() {
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  // Убираем secretKey из конструктора!
-  const wallet = new WalletContractV4({
-    client,
-    workchain: 0,
-    publicKey: walletKey.publicKey,
-    walletId: walletId,
-  });
+  try {
+    const wallet = new WalletContractV4({
+      client,
+      workchain: 0,
+      publicKey: walletKey.publicKey,
+      walletId: walletId,
+    });
 
-  return { wallet, walletKey };
+    console.log('WalletContractV4 instance created successfully');
+    return { wallet, walletKey };
+  } catch (e) {
+    console.error('Error creating WalletContractV4:', e);
+    console.log('Parameters at error time:');
+    console.log('client:', client);
+    console.log('workchain:', 0);
+    console.log('publicKey (type, length):', typeof walletKey.publicKey, walletKey.publicKey.length);
+    console.log('walletId (value, type):', walletId, typeof walletId);
+    throw e;
+  }
 }
 
 async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
@@ -44,6 +54,7 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
 
   const balance = await wallet.getBalance();
+  console.log('Wallet balance:', balance.toString());
   if (balance.lt(nanoAmount)) {
     throw new Error('Insufficient project wallet balance');
   }
@@ -112,6 +123,3 @@ const withdrawReferral = async (req, res) => {
 };
 
 export default withdrawReferral;
-
-
-////////////////
