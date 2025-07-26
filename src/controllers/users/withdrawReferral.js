@@ -4,12 +4,21 @@ import * as tonCrypto from 'ton-crypto';
 import { Cell, Address } from '@ton/core';
 import { WalletV5, walletV5ConfigToCell } from './wallet-v5.js';
 import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const { TonClient, toNano } = pkg;
 
+// Для ES-модулей определяем __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Абсолютный путь к файлу с байткодом контракта
+const walletCodePath = path.resolve(__dirname, 'wallet_v5_code.b64');
+
 // Загружаем байткод контракта WalletV5 из base64 файла
 async function loadWalletCode() {
-  const base64 = await fs.readFile('./wallet_v5_code.b64', 'utf-8');
+  const base64 = await fs.readFile(walletCodePath, 'utf-8');
   const buffer = Buffer.from(base64, 'base64');
   const cells = Cell.fromBoc(buffer);
   return cells[0];
