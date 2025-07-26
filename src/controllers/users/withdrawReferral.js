@@ -1,8 +1,19 @@
 import { supabase } from '../../services/supabaseClient.js';
 import pkg from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
+import { Cell, Address } from '@ton/core';
+import { WalletV5 } from './wallet-v5.js'; // путь к wallet-v5.js
+import fs from 'fs/promises';
 
-const { TonClient, WalletContractV5, toNano } = pkg;
+const { TonClient, toNano } = pkg;
+
+// Загружаем байткод контракта WalletV5 из base64 файла
+async function loadWalletCode() {
+  const base64 = await fs.readFile('./wallet_v5_code.b64', 'utf-8');
+  const buffer = Buffer.from(base64, 'base64');
+  const cells = Cell.fromBoc(buffer);
+  return cells[0];
+}
 
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
@@ -13,50 +24,44 @@ async function initProjectWallet() {
 
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
-  console.log('walletKey:', walletKey);
-  console.log('typeof walletKey.publicKey:', typeof walletKey.publicKey);
-  console.log('walletKey.publicKey instanceof Uint8Array:', walletKey.publicKey instanceof Uint8Array);
-  console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
-  console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
-
   const walletId = 0n;
-  console.log('walletId (as bigint):', walletId, 'type:', typeof walletId);
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  console.log('Creating WalletContractV5 with params:', {
-    client,
-    workchain: 0,
-    publicKey: walletKey.publicKey,
-    walletId,
-  });
+  const walletCode = await loadWalletCode();
 
-  const wallet = new WalletContractV5({
-    client,
-    workchain: 0,
-    publicKey: walletKey.publicKey,
+  const walletConfig = {
+    signatureAllowed: true,
+    seqno: 0,
     walletId,
-  });
+    publicKey: walletKey.publicKey,
+    extensions: new Map(),
+  };
+
+  const wallet = WalletV5.createFromConfig(walletConfig, walletCode, 0);
+
+  wallet.client = client;
 
   return { wallet, walletKey };
 }
 
-async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
+async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const nanoAmount = toNano(amount.toString());
-  console.log('nanoAmount:', nanoAmount.toString());
 
-  const balance = await wallet.getBalance();
-  console.log('wallet balance:', balance.toString());
-
-  if (balance < nanoAmount) {
+  // Получаем баланс кошелька через клиента TON напрямую
+  const balance = await wallet.client.getBalance(wallet.address);
+  if (BigInt(balance) < nanoAmount) {
     throw new Error('Insufficient project wallet balance');
   }
 
-  const seqno = await wallet.getSeqno();
-  console.log('seqno:', seqno);
+  // Получаем seqno через контракт провайдера (wallet.client)
+  const provider = await wallet.client.getContractProvider(wallet.address);
+  const seqno = await wallet.getSeqno(provider);
+
+  const toAddress = Address.parseFriendly(toAddressStr).address;
 
   const transfer = wallet.createTransfer({
     secretKey: walletKey.secretKey,
@@ -71,16 +76,14 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
     ],
   });
 
-  await wallet.client.sendExternalMessage(wallet.address, transfer);
-  console.log('Transfer sent successfully');
+  // Отправляем внешнее сообщение через провайдера
+  await provider.external(transfer);
 
   return true;
 }
 
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
-
-  console.log('Withdraw request:', { telegram_id, toAddress, amount });
 
   if (!telegram_id || !toAddress || !amount || amount <= 0) {
     return res.status(400).json({ error: 'telegram_id, wallet and positive amount are required' });
