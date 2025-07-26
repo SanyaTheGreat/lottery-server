@@ -4,6 +4,14 @@ import * as tonCrypto from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
 
+// Функция для безопасного преобразования в BigInt
+function safeBigInt(value) {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(value);
+  if (typeof value === 'string') return BigInt(value);
+  throw new Error('Cannot convert value to BigInt: ' + JSON.stringify(value));
+}
+
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
   if (!seedPhrase) {
@@ -19,8 +27,16 @@ async function initProjectWallet() {
   console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
   console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
-  // walletId с типом bigint
-  const walletId = 0n;
+  let walletIdRaw = 0; // Исходное значение walletId, возможно из env или другого источника
+  let walletId;
+
+  try {
+    walletId = safeBigInt(walletIdRaw);
+  } catch (e) {
+    console.error('Error converting walletId to BigInt:', e);
+    throw e;
+  }
+
   console.log('walletId (as bigint):', walletId, 'type:', typeof walletId);
 
   const client = new TonClient({
@@ -28,13 +44,24 @@ async function initProjectWallet() {
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  // Убираем secretKey из конструктора!
-  const wallet = new WalletContractV4({
-    client,
-    workchain: 0,
-    publicKey: walletKey.publicKey,
-    walletId: walletId,
-  });
+  // Логируем важные параметры перед созданием кошелька
+  console.log('client:', client);
+  console.log('workchain: 0');
+  console.log('publicKey (type, length):', typeof walletKey.publicKey, walletKey.publicKey.length);
+  console.log('walletId (value, type):', walletId, typeof walletId);
+
+  let wallet;
+  try {
+    wallet = new WalletContractV4({
+      client,
+      workchain: 0,
+      publicKey: walletKey.publicKey,
+      walletId: walletId,
+    });
+  } catch (e) {
+    console.error('Error creating WalletContractV4:', e);
+    throw e;
+  }
 
   return { wallet, walletKey };
 }
@@ -44,6 +71,8 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
 
   const balance = await wallet.getBalance();
+  console.log('wallet balance:', balance.toString());
+
   if (balance.lt(nanoAmount)) {
     throw new Error('Insufficient project wallet balance');
   }
@@ -52,7 +81,7 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   console.log('seqno:', seqno, 'typeof seqno:', typeof seqno);
 
   const transfer = wallet.createTransfer({
-    secretKey: walletKey.secretKey, // Передаем secretKey здесь
+    secretKey: walletKey.secretKey,
     seqno,
     sendMode: 3,
     order: [
@@ -72,7 +101,6 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
 const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet: toAddress, amount } = req.body;
 
-  // Логируем входящие параметры запроса
   console.log('Withdraw request:', { telegram_id, toAddress, amount });
 
   if (!telegram_id || !toAddress || !amount || amount <= 0) {
