@@ -19,17 +19,21 @@ async function initProjectWallet() {
   console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
   console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
+  // Логи для walletId
+  const walletId = 0;
+  console.log('typeof walletId:', typeof walletId);
+  console.log('walletId:', walletId);
+
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  // Используем walletId = 0 (number)
   const wallet = new WalletContractV4({
     client,
     workchain: 0,
     publicKey: walletKey.publicKey,
-    walletId: 0,
+    walletId: walletId,
     secretKey: walletKey.secretKey,
   });
 
