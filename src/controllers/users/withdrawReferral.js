@@ -4,14 +4,6 @@ import * as tonCrypto from 'ton-crypto';
 
 const { TonClient, WalletContractV4, toNano } = pkg;
 
-// Функция для безопасного преобразования в BigInt
-function safeBigInt(value) {
-  if (typeof value === 'bigint') return value;
-  if (typeof value === 'number') return BigInt(value);
-  if (typeof value === 'string') return BigInt(value);
-  throw new Error('Cannot convert value to BigInt: ' + JSON.stringify(value));
-}
-
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
   if (!seedPhrase) {
@@ -22,16 +14,18 @@ async function initProjectWallet() {
   const walletKey = await tonCrypto.mnemonicToWalletKey(seedWords, '');
 
   console.log('walletKey:', walletKey);
-  console.log('typeof walletKey.publicKey:', typeof walletKey.publicKey);
-  console.log('walletKey.publicKey instanceof Uint8Array:', walletKey.publicKey instanceof Uint8Array);
-  console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
-  console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
-  let walletIdRaw = 0; // Исходное значение walletId, возможно из env или другого источника
+  // Конвертация Buffer в Uint8Array, если нужно
+  const publicKey = Uint8Array.from(walletKey.publicKey);
+  const secretKey = Uint8Array.from(walletKey.secretKey);
+
+  console.log('typeof publicKey:', typeof publicKey);
+  console.log('publicKey instanceof Uint8Array:', publicKey instanceof Uint8Array);
+
+  const walletIdRaw = 0;
   let walletId;
-
   try {
-    walletId = safeBigInt(walletIdRaw);
+    walletId = BigInt(walletIdRaw);
   } catch (e) {
     console.error('Error converting walletId to BigInt:', e);
     throw e;
@@ -44,29 +38,21 @@ async function initProjectWallet() {
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  // Логируем важные параметры перед созданием кошелька
-  console.log('client:', client);
-  console.log('workchain: 0');
-  console.log('publicKey (type, length):', typeof walletKey.publicKey, walletKey.publicKey.length);
-  console.log('walletId (value, type):', walletId, typeof walletId);
-
-  let wallet;
   try {
-    wallet = new WalletContractV4({
+    const wallet = new WalletContractV4({
       client,
       workchain: 0,
-      publicKey: walletKey.publicKey,
-      walletId: walletId,
+      publicKey,
+      walletId,
     });
+    return { wallet, secretKey };
   } catch (e) {
     console.error('Error creating WalletContractV4:', e);
     throw e;
   }
-
-  return { wallet, walletKey };
 }
 
-async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
+async function sendTonTransaction(wallet, secretKey, toAddress, amount) {
   const nanoAmount = toNano(amount.toString());
   console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
 
@@ -81,7 +67,7 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   console.log('seqno:', seqno, 'typeof seqno:', typeof seqno);
 
   const transfer = wallet.createTransfer({
-    secretKey: walletKey.secretKey,
+    secretKey, // Передаем secretKey здесь
     seqno,
     sendMode: 3,
     order: [
@@ -122,9 +108,9 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Insufficient referral balance' });
     }
 
-    const { wallet, walletKey } = await initProjectWallet();
+    const { wallet, secretKey } = await initProjectWallet();
 
-    await sendTonTransaction(wallet, walletKey, toAddress, amount);
+    await sendTonTransaction(wallet, secretKey, toAddress, amount);
 
     const { error: updateError } = await supabase
       .from('users')
