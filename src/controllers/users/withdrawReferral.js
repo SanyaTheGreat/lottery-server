@@ -4,21 +4,12 @@ import * as tonCrypto from 'ton-crypto';
 import { Cell, Address } from '@ton/core';
 import { WalletV5, walletV5ConfigToCell } from './wallet-v5.js';
 import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
-const { TonClient, toNano } = pkg;
-
-// Для ES-модулей определяем __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Абсолютный путь к файлу с байткодом контракта
-const walletCodePath = path.resolve(__dirname, 'wallet_v5_code.b64');
+const { TonClient, toNano, fromNano } = pkg;
 
 // Загружаем байткод контракта WalletV5 из base64 файла
 async function loadWalletCode() {
-  const base64 = await fs.readFile(walletCodePath, 'utf-8');
+  const base64 = await fs.readFile('./wallet_v5_code.b64', 'utf-8');
   const buffer = Buffer.from(base64, 'base64');
   const cells = Cell.fromBoc(buffer);
   return cells[0];
@@ -54,21 +45,28 @@ async function initProjectWallet() {
 
   wallet.client = client;
 
+  console.log('Initialized project wallet address:', wallet.address.toString());
+
   return { wallet, walletKey };
 }
 
 async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const nanoAmount = toNano(amount.toString());
+  console.log(`Requested transfer amount: ${amount} TON (${nanoAmount.toString()} nano)`);
 
   // Получаем баланс кошелька через клиента TON напрямую
-  const balance = await wallet.client.getBalance(wallet.address);
-  if (BigInt(balance) < nanoAmount) {
+  const balanceNanoStr = await wallet.client.getBalance(wallet.address);
+  const balanceNano = BigInt(balanceNanoStr);
+  console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
+
+  if (balanceNano < nanoAmount) {
     throw new Error('Insufficient project wallet balance');
   }
 
   // Получаем seqno через контракт провайдера (wallet.client)
   const provider = await wallet.client.getContractProvider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
+  console.log('Current wallet seqno:', seqno);
 
   const toAddress = Address.parseFriendly(toAddressStr).address;
 
@@ -85,8 +83,12 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
     ],
   });
 
+  console.log('Sending transfer message...');
+
   // Отправляем внешнее сообщение через провайдера
   await provider.external(transfer);
+
+  console.log('Transfer sent successfully');
 
   return true;
 }
