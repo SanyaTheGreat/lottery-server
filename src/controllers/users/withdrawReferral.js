@@ -1,8 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
-import pkg from 'ton';
+import { TonClient, WalletContractV5, toNano } from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
-
-const { TonClient, WalletContractV4, toNano } = pkg;
 
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
@@ -19,53 +17,44 @@ async function initProjectWallet() {
   console.log('typeof walletKey.secretKey:', typeof walletKey.secretKey);
   console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
-  // Исходный walletId
-  let walletId = 0;
-  console.log('walletId raw:', walletId, 'type:', typeof walletId);
-
-  // Явно конвертируем в BigInt для безопасности
-  const walletIdBigInt = BigInt(walletId.toString());
-  console.log('walletId (as bigint):', walletIdBigInt, 'type:', typeof walletIdBigInt);
+  const walletId = 0n;
+  console.log('walletId (as bigint):', walletId, 'type:', typeof walletId);
 
   const client = new TonClient({
     endpoint: 'https://toncenter.com/api/v2/jsonRPC',
     apiKey: process.env.TON_API_KEY || '',
   });
 
-  try {
-    console.log('Creating WalletContractV4 with params:');
-    console.log({
-      client,
-      workchain: 0,
-      publicKey: walletKey.publicKey,
-      walletId: walletIdBigInt,
-    });
+  console.log('Creating WalletContractV5 with params:', {
+    client,
+    workchain: 0,
+    publicKey: walletKey.publicKey,
+    walletId,
+  });
 
-    const wallet = new WalletContractV4({
-      client,
-      workchain: 0,
-      publicKey: walletKey.publicKey,
-      walletId: walletIdBigInt,
-    });
+  const wallet = new WalletContractV5({
+    client,
+    workchain: 0,
+    publicKey: walletKey.publicKey,
+    walletId,
+  });
 
-    return { wallet, walletKey };
-  } catch (err) {
-    console.error('Error creating WalletContractV4:', err);
-    throw err;
-  }
+  return { wallet, walletKey };
 }
 
 async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   const nanoAmount = toNano(amount.toString());
-  console.log('nanoAmount:', nanoAmount, 'typeof nanoAmount:', typeof nanoAmount);
+  console.log('nanoAmount:', nanoAmount.toString());
 
   const balance = await wallet.getBalance();
-  if (balance.lt(nanoAmount)) {
+  console.log('wallet balance:', balance.toString());
+
+  if (balance < nanoAmount) {
     throw new Error('Insufficient project wallet balance');
   }
 
-  const seqno = await wallet.getSeqNo();
-  console.log('seqno:', seqno, 'typeof seqno:', typeof seqno);
+  const seqno = await wallet.getSeqno();
+  console.log('seqno:', seqno);
 
   const transfer = wallet.createTransfer({
     secretKey: walletKey.secretKey,
@@ -81,6 +70,7 @@ async function sendTonTransaction(wallet, walletKey, toAddress, amount) {
   });
 
   await wallet.client.sendExternalMessage(wallet.address, transfer);
+  console.log('Transfer sent successfully');
 
   return true;
 }
