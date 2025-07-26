@@ -1,6 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { TonClient, WalletContractV5, toNano } from '@ton/ton';
+import pkg from '@ton/ton';
 import * as tonCrypto from 'ton-crypto';
+
+const { TonClient, WalletContractV5, toNano } = pkg;
 
 async function initProjectWallet() {
   const seedPhrase = process.env.TON_SEED_PHRASE;
