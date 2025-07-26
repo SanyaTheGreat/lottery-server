@@ -38,14 +38,13 @@ async function initProjectWallet() {
 
   const walletCode = await loadWalletCode();
 
-  // Получаем фиксированный адрес кошелька из Render env
   const walletAddressStr = process.env.PROJECT_WALLET_ADDRESS;
   if (!walletAddressStr) {
     throw new Error('PROJECT_WALLET_ADDRESS is not set in environment variables');
   }
   const walletAddress = Address.parseFriendly(walletAddressStr).address;
 
-  // Создаем WalletV5, используя фиксированный адрес и init (code + data)
+  // Создаем экземпляр WalletV5 с реальным адресом и init (code + data)
   const walletConfig = {
     signatureAllowed: true,
     seqno: 0,
@@ -67,6 +66,7 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
   const nanoAmount = toNano(amount.toString());
   console.log(`Requested transfer amount: ${amount} TON (${nanoAmount.toString()} nano)`);
 
+  // Получаем баланс кошелька через клиента TON напрямую
   const balanceNanoStr = await wallet.client.getBalance(wallet.address);
   const balanceNano = BigInt(balanceNanoStr);
   console.log(`Project wallet balance: ${fromNano(balanceNano)} TON (${balanceNanoStr} nano)`);
@@ -75,7 +75,7 @@ async function sendTonTransaction(wallet, walletKey, toAddressStr, amount) {
     throw new Error('Insufficient project wallet balance');
   }
 
-  // Получаем провайдера через client.provider()
+  // Получаем провайдера и seqno
   const provider = await wallet.client.provider(wallet.address);
   const seqno = await wallet.getSeqno(provider);
   console.log('Current wallet seqno:', seqno);
