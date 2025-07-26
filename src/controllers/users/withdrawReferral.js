@@ -20,7 +20,7 @@ async function initProjectWallet() {
   console.log('walletKey.secretKey instanceof Uint8Array:', walletKey.secretKey instanceof Uint8Array);
 
   // Логи для walletId
-  const walletId = 0;
+  const walletId = 0n;
   console.log('typeof walletId:', typeof walletId);
   console.log('walletId:', walletId);
 
