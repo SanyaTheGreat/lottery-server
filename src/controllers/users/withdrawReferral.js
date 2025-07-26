@@ -5,10 +5,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-export const withdrawReferral = async (req, res) => {
+const withdrawReferral = async (req, res) => {
   const { telegram_id, wallet, amount } = req.body;
 
-  // Валидация запроса
+  // Проверка входных данных
   if (!telegram_id || !wallet || !amount) {
     return res.status(400).json({ error: 'Недостаточно данных для запроса' });
   }
@@ -33,9 +33,9 @@ export const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно средств для вывода' });
     }
 
-    // Обновляем referral_earnings
     const newBalance = user.referral_earnings - amount;
 
+    // Обновляем баланс в Supabase
     const { error: updateError } = await supabase
       .from('users')
       .update({ referral_earnings: newBalance })
@@ -45,7 +45,7 @@ export const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Ошибка при обновлении баланса' });
     }
 
-    // Здесь можно вставить отправку TON (позже)
+    // Пока что просто логируем успешный вывод (реальная отправка позже)
     console.log(`✅ Вывод ${amount} TON на кошелёк ${wallet}`);
 
     return res.status(200).json({
@@ -55,7 +55,9 @@ export const withdrawReferral = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Ошибка вывода:', err);
+    console.error('Ошибка обработки запроса на вывод:', err);
     return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 };
+
+export default withdrawReferral;
