@@ -4,7 +4,7 @@ export const getAvailableGifts = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('available_gifts')
-      .select('nft_name, nft_number, size, price, msg_id, used');
+      .select('nft_name, nft_number, msg_id, used');
 
     if (error) {
       console.error('❌ Error fetching available gifts:', error);
