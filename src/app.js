@@ -5,6 +5,7 @@ import express from 'express'
 import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
+import giftsRoutes from './routes/gifts.js';
 import cors from 'cors'
 import './checkTonTransactions.js' // ← добавили фоновый скрипт
 import './scheduler/autoDraw.js';
@@ -28,6 +29,7 @@ app.use(express.json())
 
 app.use('/users', usersRouter)
 app.use('/wheel', wheelRoutes)
+app.use('/', giftsRoutes);
 
 app.get('/', async (req, res) => {
   const { data, error } = await supabase.from('users').select('*').limit(5)

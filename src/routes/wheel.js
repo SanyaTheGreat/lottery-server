@@ -12,8 +12,7 @@ import {
   logNftTransfer,
   getPendingRewards,
   claimReward,
-  getWheelById,
-  getAvailableGifts
+  getWheelById
 } from '../controllers/wheel/index.js';
 
 
@@ -21,7 +20,7 @@ import { getUserWins } from '../controllers/wheel/getUserWins.js';
 
 const router = express.Router();
 
-router.get('/gifts', getAvailableGifts);
+
 
 router.get('/results', getAllResults);
 router.get('/active', getActiveWheels);
