@@ -25,7 +25,7 @@ router.get('/results', getAllResults);
 router.get('/active', getActiveWheels);
 router.get('/completed', getCompletedWheels);
 
-router.get('/wheel/availablegifts', getAvailableGifts);
+router.get('/wheel/gifts/availablegifts', getAvailableGifts);
 router.get('/:wheel_id/participants', getWheelParticipants);
 router.get('/:wheel_id', getWheelById);
 router.post('/create', createWheel);
