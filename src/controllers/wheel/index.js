@@ -11,3 +11,4 @@ export * from './logNftTransfer.js';
 export * from './getPendingRewards.js';
 export * from './claimReward.js';
 export * from './getWheelById.js';
+export * from './getAvailableGifts.js';

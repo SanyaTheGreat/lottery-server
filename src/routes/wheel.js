@@ -12,7 +12,8 @@ import {
   logNftTransfer,
   getPendingRewards,
   claimReward,
-  getWheelById
+  getWheelById,
+  getAvailableGifts
 } from '../controllers/wheel/index.js';
 
 
@@ -24,6 +25,7 @@ router.get('/results', getAllResults);
 router.get('/active', getActiveWheels);
 router.get('/completed', getCompletedWheels);
 
+router.get('/wheel/available-gifts', getAvailableGifts);
 router.get('/:wheel_id/participants', getWheelParticipants);
 router.get('/:wheel_id', getWheelById);
 router.post('/create', createWheel);
