@@ -21,10 +21,12 @@ import { getUserWins } from '../controllers/wheel/getUserWins.js';
 
 const router = express.Router();
 
+router.get('/gifts', getAvailableGifts);
+
 router.get('/results', getAllResults);
 router.get('/active', getActiveWheels);
 router.get('/completed', getCompletedWheels);
-router.get('/gifts', getAvailableGifts);
+
 
 router.get('/:wheel_id/participants', getWheelParticipants);
 router.get('/:wheel_id', getWheelById);
