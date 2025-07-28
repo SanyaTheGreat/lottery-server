@@ -1,6 +1,14 @@
 import { supabase } from '../../services/supabaseClient.js';
 
+const GEM_KEY = process.env.GEM_KEY;
+
 export const deleteWheel = async (req, res) => {
+  const gemKey = req.headers['x-gem-key'];
+
+  if (!gemKey || gemKey !== GEM_KEY) {
+    return res.status(403).json({ error: 'Недействительный GEM ключ' });
+  }
+
   const { wheel_id } = req.params;
 
   if (!wheel_id) {
