@@ -1,6 +1,12 @@
 import { supabase } from '../../services/supabaseClient.js';
 
 export const createWheel = async (req, res) => {
+  const gemKey = req.headers['x-gem-key'];
+
+  if (!gemKey || gemKey !== process.env.GEM_KEY) {
+    return res.status(403).json({ error: 'Forbidden: Invalid GEM key' });
+  }
+
   const { nft_name, nft_number, size, price, msg_id } = req.body;
 
   if (!nft_name || !nft_number || !size || !price || !msg_id) {
