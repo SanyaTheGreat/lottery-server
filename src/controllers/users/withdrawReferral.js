@@ -48,6 +48,18 @@ const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Ошибка при обновлении баланса' });
     }
 
+
+    await supabase.from('referral_withdrawals').insert([
+      {
+        telegram_id,
+        wallet,
+        amount,
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
     return res.status(200).json({
       success: true,
       message: `Успешно отправлено ${amount} TON`,
