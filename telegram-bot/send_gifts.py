@@ -8,11 +8,12 @@ from supabase import create_client, Client as SupabaseClient
 api_id = int(os.getenv("api_id"))
 api_hash = os.getenv("api_hash")
 
-session_name = "OGstorage_account"
+session_name = "account"
 
 # Supabase init
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Инициализация Telegram клиента
@@ -37,7 +38,7 @@ async def send_pending_gifts():
             chat_id = item["telegram_id"]
 
             try:
-                await app.transfer_gift(message_id=msg_id, to_chat_id=chat_id)
+                await app.transfer_gift(owned_gift_id=str(msg_id), new_owner_chat_id=chat_id)
                 print(f"🎁 Подарок из сообщения {msg_id} отправлен пользователю {chat_id}")
                 
 
