@@ -8,6 +8,7 @@ from supabase import create_client, Client as SupabaseClient
 api_id = int(os.getenv("api_id"))
 api_hash = os.getenv("api_hash")
 
+session_name = "OGstorage_account"
 
 # Supabase init
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -15,7 +16,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Инициализация Telegram клиента
-app = Client("OGstorage_account", api_id, api_hash)
+app = Client(session_name, api_id, api_hash)
 
 async def send_pending_gifts():
     await app.start()
