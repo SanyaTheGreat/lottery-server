@@ -79,7 +79,7 @@ def notify_users_loop():
                         keyboard.add(
                             InlineKeyboardButton(
                                 "🎯 Перейти к розыгрышу",
-                                url=f"{WEBAPP_URL}/wheel/{wheel_id}"
+                                web_app=WebAppInfo(url=f"{WEBAPP_URL}/wheel/{wheel_id}?tgWebAppExpand=true")
                             )
                         )
 
