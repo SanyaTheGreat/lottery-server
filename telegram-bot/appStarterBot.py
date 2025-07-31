@@ -75,9 +75,18 @@ def notify_users_loop():
                     username = user.get('username', 'Player')
 
                     try:
+                        keyboard = InlineKeyboardMarkup()
+                        keyboard.add(
+                            InlineKeyboardButton(
+                                "🎯 Перейти к розыгрышу",
+                                url=f"{WEBAPP_URL}/wheel/{wheel_id}"
+                            )
+                        )
+
                         bot.send_message(
                             telegram_id,
-                            f"{username}! Your game for a prize {nft_name} will start in 1 minute! 🎁"
+                            f"{username}! Your game for a prize {nft_name} will start in 1 minute! 🎁",
+                            reply_markup=keyboard
                         )
                         print(f"🔔 Уведомление отправлено пользователю {telegram_id}")
                     except Exception as e:
