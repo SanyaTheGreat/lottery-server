@@ -1,5 +1,5 @@
 pyTelegramBotAPI
-pyrogram
+kurigram =2.2.7
 tgcrypto
 supabase
 requests
