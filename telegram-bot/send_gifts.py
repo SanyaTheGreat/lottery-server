@@ -19,6 +19,7 @@ supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Client(session_name, api_id, api_hash)
 
 async def send_pending_gifts():
+    print("🟡 Стартуем Pyrogram...")
     await app.start()
     print("📤 Запущена проверка и отправка подарков")
 
