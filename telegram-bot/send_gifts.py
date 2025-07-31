@@ -5,13 +5,13 @@ from pyrogram import Client
 from supabase import create_client, Client as SupabaseClient
 
 # 🔐 Авторизация
-api_id = int(os.getenv("api_id"))
-api_hash = os.getenv("api_hash")
+api_id = 20572626
+api_hash = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 session_name = "OGstorage_account"
 
 # Supabase init
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGNmdHlxa3d1Y2Jrc2tuc2R1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NDY3MTg4MiwiZXhwIjoyMDYwMjQ3ODgyfQ.oSMAenP7WqL19Fl8fhwx7WfwKMG4us-KQ6d_XbpIJSw"
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Инициализация Telegram клиента
