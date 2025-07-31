@@ -3,3 +3,4 @@ pyrogram
 tgcrypto
 supabase
 requests
+kurigram
