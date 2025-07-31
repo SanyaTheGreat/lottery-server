@@ -4,23 +4,22 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from supabase import create_client, Client
 
-# Получение переменных окружения
+# 🔧 Конфигурация
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("Ошибка: BOT_TOKEN не установлен в переменных окружениях")
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://frontend-nine-sigma-49.vercel.app/")
+
+if not BOT_TOKEN:
+    raise ValueError("Ошибка: BOT_TOKEN не установлен в переменных окружениях")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Ошибка: SUPABASE_URL и SUPABASE_KEY должны быть установлены в переменных окружениях")
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://frontend-nine-sigma-49.vercel.app/")
-
-# Инициализация клиентов
+# 📦 Инициализация Supabase и бота
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Обработка /start
+# 🎉 Команда /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user = message.from_user
@@ -49,61 +48,55 @@ def send_welcome(message):
         reply_markup=keyboard
     )
 
-# Отправка уведомлений о запуске розыгрыша
-def notify_upcoming_wheels():
-    try:
-        response = supabase.table("wheels") \
-            .select("id, nft_name") \
-            .eq("status", "completed") \
-            .eq("notified", False) \
-            .execute()
-        
-        wheels = response.data
+# 🔔 Функция проверки новых розыгрышей
+def check_and_notify():
+    print("🔍 Проверка розыгрышей на запуск...")
 
-        for wheel in wheels:
-            wheel_id = wheel["id"]
-            nft_name = wheel.get("nft_name", "your prize")
+    # Получаем все колёса со статусом completed и notified = false/null
+    wheels_query = supabase.table("wheels").select("*").eq("status", "completed").is_("notified", None)
+    data = wheels_query.execute()
 
-            # Получаем победителя по этому розыгрышу
-            result_res = supabase.table("wheel_results") \
-                .select("username, telegram_id") \
-                .eq("wheel_id", wheel_id) \
-                .execute()
+    if not data.data:
+        return
 
-            if not result_res.data:
+    for wheel in data.data:
+        wheel_id = wheel["id"]
+        nft_name = wheel.get("nft_name", "ваш приз")
+        print(f"📣 Оповещение участников колеса #{wheel_id}")
+
+        # Получаем всех участников этого колеса
+        participants_query = supabase.table("wheel_participants").select("telegram_id, username").eq("wheel_id", wheel_id)
+        participants = participants_query.execute().data
+
+        for p in participants:
+            tg_id = p.get("telegram_id")
+            username = p.get("username", "")
+            if not tg_id:
                 continue
 
-            winner = result_res.data[0]
-            username = winner.get("username", "User")
-            telegram_id = winner.get("telegram_id")
+            try:
+                bot.send_message(
+                    tg_id,
+                    f"🎯 {username or 'Игрок'}! Your game for a prize {nft_name} will start in 1 minute!"
+                )
+                print(f"✅ Сообщение отправлено: {tg_id}")
+            except Exception as e:
+                print(f"⚠️ Ошибка отправки {tg_id}: {e}")
 
-            if telegram_id:
-                try:
-                    bot.send_message(
-                        telegram_id,
-                        f"{username}! Your game for a prize {nft_name} will start in 1 minute! 🎉"
-                    )
-                except Exception as e:
-                    print(f"Ошибка отправки уведомления пользователю {telegram_id}: {e}")
+        # Отмечаем колесо как оповещённое
+        supabase.table("wheels").update({"notified": True}).eq("id", wheel_id).execute()
+        print(f"✅ Колесо #{wheel_id} отмечено как notified")
 
-            # Обновляем поле notified = true
-            supabase.table("wheels").update({"notified": True}).eq("id", wheel_id).execute()
-
-    except Exception as e:
-        print(f"Ошибка при отправке уведомлений: {e}")
-
-# Основной запуск
 if __name__ == "__main__":
     print("🚀 AppStarterBot запущен и ждёт /start")
 
-    # Запускаем проверку каждые 10 секунд в фоне
-    import threading
+    # Запуск отдельного потока проверки каждые 10 секунд
+    while True:
+        try:
+            check_and_notify()
+        except Exception as e:
+            print(f"❌ Ошибка в check_and_notify: {e}")
+        time.sleep(10)
 
-    def poll_notifications():
-        while True:
-            notify_upcoming_wheels()
-            time.sleep(10)
-
-    threading.Thread(target=poll_notifications, daemon=True).start()
-
+    # Основной polling бота
     bot.infinity_polling()
