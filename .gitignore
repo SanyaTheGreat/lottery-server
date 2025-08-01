@@ -1,1 +1,3 @@
 .env
+telegram-bot/download_gifts.py
+telegram-bot/scan_gifts_from_chat.py
