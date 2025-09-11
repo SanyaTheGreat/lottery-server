@@ -64,10 +64,12 @@ export const joinWheel = async (req, res) => {
     return res.status(400).json({ error: 'Not enough tickets to join this wheel' });
   }
 
-  // Списываем билеты у пользователя
+  // Списываем билеты у пользователя (фиксируем округление)
+  const newTickets = Math.round((user.tickets - wheel.price) * 1e9) / 1e9;
+
   const { error: updateError } = await supabase
     .from('users')
-    .update({ tickets: user.tickets - wheel.price })
+    .update({ tickets: newTickets })
     .eq('id', user_id);
 
   if (updateError) {
@@ -87,7 +89,7 @@ export const joinWheel = async (req, res) => {
 
   // Начисляем реферальный бонус (10%) пригласителю, если есть
   if (user.referred_by) {
-    const bonus = wheel.price * 0.1;
+    const bonus = Math.round(wheel.price * 0.1 * 1e9) / 1e9;
 
     try {
       // Вставляем запись в referral_earnings (история)
@@ -110,7 +112,7 @@ export const joinWheel = async (req, res) => {
       if (referrerError || !referrerData) {
         console.error('Ошибка получения данных пригласителя:', referrerError);
       } else {
-        const newEarnings = (referrerData.referral_earnings || 0) + bonus;
+        const newEarnings = Math.round(((referrerData.referral_earnings || 0) + bonus) * 1e9) / 1e9;
 
         const { error: updateEarningsError } = await supabase
           .from('users')
