@@ -1,5 +1,9 @@
 import { supabase } from '../../services/supabaseClient.js';
 
+// helper для перевода в nano и обратно
+const toNano = (val) => BigInt(Math.round(Number(val) * 1e9));
+const fromNano = (nano) => (Number(nano) / 1e9).toFixed(9);
+
 export const joinWheel = async (req, res) => {
   const { wheel_id, user_id, telegram_id, username } = req.body;
 
@@ -60,16 +64,17 @@ export const joinWheel = async (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  if (user.tickets < wheel.price) {
+  if (Number(user.tickets) < Number(wheel.price)) {
     return res.status(400).json({ error: 'Not enough tickets to join this wheel' });
   }
 
-  // Списываем билеты у пользователя (фиксируем округление)
-  const newTickets = Math.round((user.tickets - wheel.price) * 1e9) / 1e9;
+  // Списываем билеты у пользователя (через nano)
+  const newTicketsNano = toNano(user.tickets) - toNano(wheel.price);
+  const newTicketsStr = fromNano(newTicketsNano); // строка "0.100000000"
 
   const { error: updateError } = await supabase
     .from('users')
-    .update({ tickets: newTickets })
+    .update({ tickets: newTicketsStr })
     .eq('id', user_id);
 
   if (updateError) {
@@ -89,7 +94,8 @@ export const joinWheel = async (req, res) => {
 
   // Начисляем реферальный бонус (10%) пригласителю, если есть
   if (user.referred_by) {
-    const bonus = Math.round(wheel.price * 0.1 * 1e9) / 1e9;
+    const bonusNano = toNano(wheel.price) / 10n; // 10%
+    const bonusStr = fromNano(bonusNano);
 
     try {
       // Вставляем запись в referral_earnings (история)
@@ -98,7 +104,7 @@ export const joinWheel = async (req, res) => {
           referrer_id: user.referred_by,
           referred_id: user_id,
           wheel_id,
-          amount: bonus,
+          amount: bonusStr,
         }
       ]);
 
@@ -112,11 +118,12 @@ export const joinWheel = async (req, res) => {
       if (referrerError || !referrerData) {
         console.error('Ошибка получения данных пригласителя:', referrerError);
       } else {
-        const newEarnings = Math.round(((referrerData.referral_earnings || 0) + bonus) * 1e9) / 1e9;
+        const newEarningsNano = toNano(referrerData.referral_earnings || 0) + bonusNano;
+        const newEarningsStr = fromNano(newEarningsNano);
 
         const { error: updateEarningsError } = await supabase
           .from('users')
-          .update({ referral_earnings: newEarnings })
+          .update({ referral_earnings: newEarningsStr })
           .eq('id', user.referred_by);
 
         if (updateEarningsError) {
