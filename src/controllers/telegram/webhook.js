@@ -1,6 +1,6 @@
 // src/controllers/telegram/webhook.js
 import fetch from "node-fetch"; // если Node >=18 — можно убрать и использовать global fetch
-import { supabase } from "../../supabaseClient.js"; // скорректируй путь к своему клиенту
+import { supabase } from "../../services/supabaseClient.js"; // скорректируй путь к своему клиенту
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // ответ на pre_checkout_query (обязателен для прохождения оплаты)
