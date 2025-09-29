@@ -2,18 +2,19 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 import express from 'express'
+import cors from 'cors'
+
 import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
-import giftsRoutes from './routes/gifts.js';
-import cors from 'cors'
-import './checkTonTransactions.js' // ← добавили фоновый скрипт
-import './scheduler/autoDraw.js';
+import giftsRoutes from './routes/gifts.js'
 
+// фоновые задачи
+import './checkTonTransactions.js'   // сканер TON
+import './scheduler/autoDraw.js'
 
-
-
-
+// 👉 Telegram Stars webhook
+import telegramWebhook from './controllers/telegram/webhook.js'
 
 console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL)
 
@@ -25,12 +26,20 @@ app.use(cors({
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
   allowedHeaders: ['Content-Type'],
 }))
+
+// важно для приёма JSON от Telegram
 app.use(express.json())
 
+// --- Роуты API ---
 app.use('/users', usersRouter)
 app.use('/wheel', wheelRoutes)
-app.use('/', giftsRoutes);
+app.use('/', giftsRoutes)
 
+// --- Telegram webhook ---
+// Telegram будет слать POST запросы сюда
+app.post('/tg/webhook', telegramWebhook)
+
+// тестовый корневой эндпоинт
 app.get('/', async (req, res) => {
   const { data, error } = await supabase.from('users').select('*').limit(5)
   if (error) {
@@ -42,6 +51,7 @@ app.get('/', async (req, res) => {
 app.listen(port, () => {
   console.log(`🚀 Server running at http://localhost:${port}`)
 })
+
 
 // 👉 Временная отладка Supabase запроса
 fetch("https://djpcftyqkwucbksknsdu.supabase.co/rest/v1/users", {
