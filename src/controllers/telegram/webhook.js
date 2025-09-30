@@ -48,10 +48,13 @@ async function getFx() {
 // ---- main webhook handler ---------------------------------------
 
 export default async function telegramWebhook(req, res) {
+  // ЛОГ: что прислал Telegram
+  console.log("TG update:", JSON.stringify(req.body));
+
   try {
     const upd = req.body;
 
-    // 1) Pre-checkout query
+    // 1) Pre-checkout query (обязательно отвечаем ОК)
     if (upd?.pre_checkout_query) {
       await answerPreCheckoutQuery(upd.pre_checkout_query.id, true);
       return res.sendStatus(200);
@@ -59,7 +62,14 @@ export default async function telegramWebhook(req, res) {
 
     const msg = upd?.message || upd?.edited_message;
 
-    // 2) /start
+    // 2) ВРЕМЕННО: эхо на любые текстовые сообщения (для диагностики)
+    if (msg?.text && !msg?.successful_payment) {
+      await sendMessage(msg.chat.id, "✅ webhook жив. Вы прислали: " + msg.text);
+      // ↓ раскомментируй блок /start ниже и удали этот return, когда убедишься что всё ок
+      return res.sendStatus(200);
+    }
+
+    // 3) /start (кнопка для открытия Mini App с поддержкой рефералки)
     if (msg?.text?.startsWith("/start")) {
       const user = msg.from;
       const parts = msg.text.trim().split(/\s+/, 2);
@@ -87,7 +97,7 @@ export default async function telegramWebhook(req, res) {
       return res.sendStatus(200);
     }
 
-    // 3) Successful payment
+    // 4) Успешная оплата Stars
     const sp = msg?.successful_payment;
     if (sp) {
       const telegram_id = msg.from.id;
@@ -103,10 +113,10 @@ export default async function telegramWebhook(req, res) {
       if (exists) return res.sendStatus(200);
 
       const { ton_per_100stars, fee_markup } = await getFx();
-      const ton_per_star = Number(ton_per_100stars) / 100;
-      const multiplierNet = 1 - Number(fee_markup);
+      const ton_per_star   = Number(ton_per_100stars) / 100;
+      const multiplierNet  = 1 - Number(fee_markup);
 
-      const tickets_raw = Number(stars_paid) * ton_per_star * multiplierNet;
+      const tickets_raw    = Number(stars_paid) * ton_per_star * multiplierNet;
       const tickets_credit = roundDownToStep(tickets_raw, 0.1);
 
       await supabase.from("sells").insert({
