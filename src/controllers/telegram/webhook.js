@@ -1,8 +1,7 @@
 // src/controllers/telegram/webhook.js
 import { supabase } from "../../services/supabaseClient.js";
 
-// ENV
-const BOT_TOKEN  = process.env.BOT_TOKEN; // токен бота (переменная в Render)
+const BOT_TOKEN  = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app";
 
 // ----- helpers ----------------------------------------------------
@@ -27,9 +26,10 @@ async function answerPreCheckoutQuery(id, ok = true, error_message) {
   return tg("answerPreCheckoutQuery", body);
 }
 
-function roundDownToStep(value, step = 0.1) {
-  // округляем ВНИЗ к шагу 0.1
-  return Math.floor((Number(value) + 1e-9) / step) * step;
+// округление ВНИЗ к 0.1, но безопасно через целые десятые
+function floorToTenthsInt(value) {
+  // добавляем крошечный эпсилон, умножаем на 10 и берём floor → целые "десятые"
+  return Math.floor((Number(value) + 1e-9) * 10);
 }
 
 async function getFx() {
@@ -91,10 +91,10 @@ export default async function telegramWebhook(req, res) {
     const sp = msg?.successful_payment;
     if (sp) {
       const telegram_id = msg.from.id;
-      const stars_paid  = sp.total_amount; // количество звёзд (целое)
+      const stars_paid  = sp.total_amount; // integer
       const tx_id = sp.telegram_payment_charge_id || sp.provider_payment_charge_id;
 
-      // идемпотентность: если транзакция уже есть — выходим
+      // идемпотентность
       const { data: exists } = await supabase
         .from("sells")
         .select("id")
@@ -106,23 +106,27 @@ export default async function telegramWebhook(req, res) {
       const ton_per_star  = Number(ton_per_100stars) / 100;
       const netMultiplier = 1 - Number(fee_markup);
 
-      // Рассчёт зачисления и округление до 0.1
-      const tickets_raw    = Number(stars_paid) * ton_per_star * netMultiplier;
-      const tickets_credit = roundDownToStep(tickets_raw, 0.1);
+      // "сырое" TON как число (для аудита/логов), но все расчёты для зачисления — в интеджерах десятых
+      const tickets_raw = Number(stars_paid) * ton_per_star * netMultiplier;
+
+      // целые "десятые": округляем ВНИЗ к шагу 0.1
+      const tickets_tenths = floorToTenthsInt(tickets_raw); // int
+      const tickets_credit = tickets_tenths / 10;           // decimal с 1 знаком после запятой, без дрожания
 
       // Лог в sells
       await supabase.from("sells").insert({
         telegram_id,
         amount_stars: stars_paid,
-        amount_ton: tickets_raw,    // «сырое» TON, для аудита
-        amount: tickets_credit,    // зачислено на баланс
+        // храните аудиторное значение как строку/decimal с нужной точностью, чтобы не потерять его:
+        amount_ton: Number.isFinite(tickets_raw) ? Number(tickets_raw.toFixed(6)) : null,
+        amount: tickets_credit,        // что зачислено
         rate_at: ton_per_100stars,
         tx_id,
         status: "paid",
         payload: JSON.stringify({ currency: sp.currency })
       });
 
-      // Зачисляем на баланс пользователя (users.tickets)
+      // Зачисляем на баланс пользователя (users.tickets), копим через целые "десятые"
       const { data: user } = await supabase
         .from("users")
         .select("id, tickets")
@@ -130,9 +134,11 @@ export default async function telegramWebhook(req, res) {
         .maybeSingle();
 
       if (user) {
+        const curr_tenths = floorToTenthsInt(user.tickets || 0); // нормализуем существующее значение
+        const new_tenths  = curr_tenths + tickets_tenths;
         await supabase
           .from("users")
-          .update({ tickets: (user.tickets || 0) + tickets_credit })
+          .update({ tickets: new_tenths / 10 })
           .eq("id", user.id);
       } else {
         await supabase
@@ -143,7 +149,7 @@ export default async function telegramWebhook(req, res) {
       // Уведомление пользователю
       await sendMessage(
         msg.chat.id,
-        `Оплата получена ✅ Зачислено: ${tickets_credit.toFixed(1)} tickets`
+        `Оплата получена ✅ Successful: ${tickets_credit.toFixed(1)} TON`
       );
 
       return res.sendStatus(200);
