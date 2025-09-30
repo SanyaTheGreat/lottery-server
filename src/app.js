@@ -12,6 +12,8 @@ import giftsRoutes from './routes/gifts.js'
 // фоновые задачи
 import './checkTonTransactions.js'   // сканер TON
 import './scheduler/autoDraw.js'
+import './scheduler/notifier.js';
+
 
 // 👉 Telegram Stars webhook
 import telegramWebhook from './controllers/telegram/webhook.js'
