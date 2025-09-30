@@ -2,7 +2,7 @@
 import { supabase } from "../../services/supabaseClient.js";
 
 // ENV
-const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN; // токен бота (лежит в Render)
+const BOT_TOKEN  = process.env.BOT_TOKEN; // токен бота (лежит в Render)
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app";
 
 // ---- helpers ----------------------------------------------------
