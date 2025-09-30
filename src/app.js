@@ -8,6 +8,7 @@ import { supabase } from './services/supabaseClient.js'
 import usersRouter from './routes/users.js'
 import wheelRoutes from './routes/wheel.js'
 import giftsRoutes from './routes/gifts.js'
+import paymentsRoutes from './routes/payments.js';
 
 // фоновые задачи
 import './checkTonTransactions.js'   // сканер TON
@@ -36,6 +37,7 @@ app.use(express.json())
 app.use('/users', usersRouter)
 app.use('/wheel', wheelRoutes)
 app.use('/', giftsRoutes)
+app.use('/payments', paymentsRoutes);
 
 // --- Telegram webhook ---
 // Telegram будет слать POST запросы сюда
