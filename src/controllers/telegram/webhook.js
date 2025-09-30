@@ -115,7 +115,7 @@ export default async function telegramWebhook(req, res) {
         telegram_id,
         amount_stars: stars_paid,
         amount_ton: tickets_raw,    // «сырое» TON, для аудита
-        tickets: tickets_credit,    // зачислено на баланс
+        amount: tickets_credit,    // зачислено на баланс
         rate_at: ton_per_100stars,
         tx_id,
         status: "paid",
