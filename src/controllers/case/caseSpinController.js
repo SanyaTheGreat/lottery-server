@@ -1,185 +1,287 @@
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
-// 🎰 Запустить спин
+/**
+ * POST /api/case/spin
+ * body: { case_id: uuid, telegram_id: number, pay_with: 'stars'|'ton', idempotency_key?: uuid }
+ * поведение:
+ *  - списывает оплату (если stars)
+ *  - выбирает шанс из case_chance (is_active=true, quantity>0)
+ *  - если ничего нет → статус 'lose'
+ *  - если есть приз → пишет спин со статусом 'pending' (для дальнейшего claim/reroll)
+ */
 export const spinCase = async (req, res) => {
   try {
-    const { case_id, telegram_id } = req.body;
+    const { case_id, telegram_id, pay_with = "stars", idempotency_key } = req.body;
     if (!case_id || !telegram_id) {
       return res.status(400).json({ error: "case_id и telegram_id обязательны" });
     }
+    if (pay_with !== "stars" && pay_with !== "ton") {
+      return res.status(400).json({ error: "pay_with должен быть 'stars' или 'ton'" });
+    }
 
-    // 1) кейс активен?
-    const { data: caseData, error: caseError } = await supabase
+    // кейс
+    const { data: caseRow, error: caseErr } = await supabase
       .from("cases")
-      .select("*")
+      .select("id, price, is_active")
       .eq("id", case_id)
-      .eq("status", "active")
       .single();
-    if (caseError || !caseData) return res.status(404).json({ error: "Кейс не найден или не активен" });
+    if (caseErr || !caseRow || !caseRow.is_active) {
+      return res.status(404).json({ error: "Кейс не найден или не активен" });
+    }
 
-    // 2) пользователь существует?
-    const { data: user, error: userError } = await supabase
+    // пользователь
+    const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("*")
+      .select("id, telegram_id, stars")
       .eq("telegram_id", telegram_id)
       .single();
-    if (userError || !user) return res.status(404).json({ error: "Пользователь не найден" });
+    if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
-    // 3) хватает звёзд?
-    if (user.stars < caseData.price) {
-      return res.status(402).json({ error: `Недостаточно средств (нужно ${caseData.price} звёзд)` });
+    // оплата
+    let pay_with_stars = null;
+    let pay_with_ton = null;
+    if (pay_with === "stars") {
+      const price = Number(caseRow.price);
+      if ((user.stars || 0) < price) {
+        return res.status(402).json({ error: `Недостаточно звёзд (нужно ${price})` });
+      }
+      const { error: updErr } = await supabase
+        .from("users")
+        .update({ stars: Number(user.stars) - price })
+        .eq("id", user.id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+      pay_with_stars = price;
+    } else {
+      // TON — списание не через users; просто логируем сумму
+      pay_with_ton = Number(caseRow.price);
     }
 
-    // 4) списываем оплату
-    await supabase.from("users").update({ stars: user.stars - caseData.price }).eq("telegram_id", telegram_id);
-
-    // 5) берём активные предметы кейса
-    const { data: items, error: itemsError } = await supabase
-      .from("case_items")
-      .select("*")
+    // активные шансы с запасом
+    const { data: chances, error: chErr } = await supabase
+      .from("case_chance")
+      .select("id, slug, weight, price, payout_value, quantity, is_active")
       .eq("case_id", case_id)
-      .eq("active", true);
-    if (itemsError || !items?.length) return res.status(400).json({ error: "В кейсе нет предметов" });
+      .eq("is_active", true)
+      .gt("quantity", 0);
+    if (chErr) return res.status(500).json({ error: chErr.message });
 
-    // 6) RNG
-    const weightsSum = items.reduce((s, i) => s + Number(i.weight), 0);
-    const rng = Math.random() * weightsSum;
-    let selectedItem = null, cumulative = 0;
-    for (const it of items) {
-      cumulative += Number(it.weight);
-      if (rng <= cumulative) { selectedItem = it; break; }
+    // если ничего доступного — проигрыш
+    if (!chances || chances.length === 0) {
+      const spinId = uuidv4();
+      const idem = idempotency_key || uuidv4();
+      const { data: spinLose, error: spinLoseErr } = await supabase
+        .from("case_spins")
+        .insert([{
+          id: spinId,
+          case_id,
+          user_id: user.id,
+          chance_id: null,
+          status: "lose",
+          rng_roll: 0,
+          weights_sum: 0,
+          pay_with_stars,
+          pay_with_ton,
+          reroll_amount: null,
+          idempotency_key: idem
+        }])
+        .select("id")
+        .single();
+      if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
+      return res.json({ spin_id: spinLose.id, status: "lose" });
     }
 
-    // 7) лог спина
-    const spinId = uuidv4();
-    const idemKey = uuidv4();
-    const status = selectedItem ? "won" : "lose";
+    // RNG
+    const weightsSum = chances.reduce((s, c) => s + Number(c.weight), 0);
+    const roll = Math.random() * weightsSum;
+    let pick = null;
+    let acc = 0;
+    for (const c of chances) {
+      acc += Number(c.weight);
+      if (roll <= acc) { pick = c; break; }
+    }
+    // на всякий случай
+    if (!pick) pick = chances[chances.length - 1];
 
-    const { data: spin, error: spinError } = await supabase
+    // запись спина со статусом "pending" (до решения пользователя)
+    const spinId = uuidv4();
+    const idem = idempotency_key || uuidv4();
+    const { data: spinWin, error: spinWinErr } = await supabase
       .from("case_spins")
       .insert([{
         id: spinId,
         case_id,
         user_id: user.id,
-        item_id: selectedItem?.id || null,
-        status,
-        rng_roll: rng,
+        chance_id: pick.id,
+        status: "pending",              // промежуточный статус до claim/reroll
+        rng_roll: roll,
         weights_sum: weightsSum,
-        prize_slug: selectedItem?.slug || null,
-        price: caseData.price,
-        pay_with: "stars",        // сейчас всегда звёзды
-        idempotency_key: idemKey, // добавили сюда
-        started_at: new Date().toISOString()
+        pay_with_stars,
+        pay_with_ton,
+        reroll_amount: null,
+        idempotency_key: idem
       }])
-      .select()
+      .select("id")
       .single();
-    if (spinError) return res.status(500).json({ error: spinError.message });
+    if (spinWinErr) return res.status(500).json({ error: spinWinErr.message });
 
-    // 8) ответ
     return res.json({
-      spin_id: spin.id,
-      status,
-      rng_roll: rng,
-      prize: selectedItem ? {
-        item_id: selectedItem.id,
-        type: selectedItem.type,
-        tier: selectedItem.tier,
-        slug: selectedItem.slug
-      } : null
+      spin_id: spinWin.id,
+      status: "pending",
+      rng_roll: roll,
+      prize: {
+        chance_id: pick.id,
+        slug: pick.slug,
+        price: pick.price,
+        payout_value: pick.payout_value
+      }
     });
-
-  } catch (err) {
-    console.error("❌ spinCase:", err);
-    return res.status(500).json({ error: "Ошибка при спине кейса" });
+  } catch (e) {
+    return res.status(500).json({ error: "spinCase failed" });
   }
 };
 
-// 🏆 Получить приз
-export const claimPrize = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { data: spin, error: spinError } = await supabase
-      .from("case_spins")
-      .select("*, case_items(*)")
-      .eq("id", id)
-      .single();
-    if (spinError || !spin) return res.status(404).json({ error: "Спин не найден" });
-    if (spin.status !== "won") return res.status(409).json({ error: "Нельзя получить приз — статус не won" });
-
-    const item = spin.case_items;
-
-    if (item.type === "gift") {
-      const { data: gift, error: giftErr } = await supabase
-        .from("case_gifts")
-        .select("*")
-        .eq("used", false)
-        .eq("slug", item.slug)
-        .limit(1)
-        .single();
-      if (giftErr || !gift) return res.status(409).json({ error: "Нет доступных подарков" });
-
-      await supabase.from("case_gifts").update({ used: true }).eq("pending_id", gift.pending_id);
-
-      await supabase.from("pending_rewards").insert([{
-        source: "case",
-        spin_id: spin.id,
-        winner_id: spin.user_id,
-        telegram_id: null,
-        username: null,
-        nft_name: gift.nft_name,
-        nft_number: gift.nft_number,
-        slug: gift.slug,
-        msg_id: gift.msg_id,
-        status: "pending",
-        created_at: new Date().toISOString()
-      }]);
-
-    } else if (item.type === "stars") {
-      const amount = item.payout_value || 10;
-      const { data: u } = await supabase.from("users").select("stars").eq("id", spin.user_id).single();
-      if (u) await supabase.from("users").update({ stars: (u.stars || 0) + amount }).eq("id", spin.user_id);
-    }
-
-    await supabase.from("case_spins").update({ status: "reward_sent" }).eq("id", spin.id);
-
-    return res.json({ status: "ok", prize: { type: item.type, slug: item.slug, tier: item.tier } });
-
-  } catch (err) {
-    console.error("❌ claimPrize:", err);
-    return res.status(500).json({ error: "Ошибка при получении приза" });
-  }
-};
-
-// 🔄 Продать приз (reroll)
+/**
+ * POST /api/case/spin/:id/reroll
+ * продаём приз → начисляем payout_value звёздами, статус 'reroll'
+ * ВАЖНО: quantity в case_chance НЕ уменьшаем (подарок остаётся у нас).
+ */
 export const rerollPrize = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: spin, error: spinError } = await supabase
+    // грузим спин + шанс
+    const { data: spin, error: spinErr } = await supabase
       .from("case_spins")
-      .select("*, case_items(*)")
+      .select("id, user_id, chance_id, status")
       .eq("id", id)
       .single();
-    if (spinError || !spin) return res.status(404).json({ error: "Спин не найден" });
-    if (spin.status !== "won") return res.status(409).json({ error: "Нельзя продать — статус не won" });
+    if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
+    if (spin.status !== "pending") {
+      return res.status(409).json({ error: "invalid state (ожидается pending)" });
+    }
+    if (!spin.chance_id) {
+      return res.status(409).json({ error: "nothing to reroll (lose)" });
+    }
 
-    const item = spin.case_items;
-    const rerollAmount = item.payout_value || 5;
+    const { data: chance, error: chErr } = await supabase
+      .from("case_chance")
+      .select("id, payout_value")
+      .eq("id", spin.chance_id)
+      .single();
+    if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
 
-    const { data: u } = await supabase.from("users").select("stars").eq("id", spin.user_id).single();
-    if (u) await supabase.from("users").update({ stars: (u.stars || 0) + rerollAmount }).eq("id", spin.user_id);
+    const payout = Number(chance.payout_value) || 0;
 
-    await supabase
+    // начисляем звёзды пользователю
+    const { data: user } = await supabase.from("users").select("id, stars").eq("id", spin.user_id).single();
+    if (user) {
+      await supabase
+        .from("users")
+        .update({ stars: Number(user.stars || 0) + payout })
+        .eq("id", spin.user_id);
+    }
+
+    // статус спина
+    const { error: updErr } = await supabase
       .from("case_spins")
-      .update({ status: "reroll", reroll_amount: rerollAmount })
+      .update({ status: "reroll", reroll_amount: payout })
       .eq("id", spin.id);
+    if (updErr) return res.status(500).json({ error: updErr.message });
 
-    return res.json({ status: "reroll", reroll_amount: rerollAmount });
+    return res.json({ status: "reroll", reroll_amount: payout });
+  } catch {
+    return res.status(500).json({ error: "rerollPrize failed" });
+  }
+};
 
-  } catch (err) {
-    console.error("❌ rerollPrize:", err);
-    return res.status(500).json({ error: "Ошибка при продаже приза" });
+/**
+ * POST /api/case/spin/:id/claim
+ * выдаём приз:
+ *  - уменьшаем quantity в case_chance на 1
+ *  - ищем реальный подарок в gifts_for_cases по slug (used=false)
+ *  - помечаем его used=true
+ *  - создаём запись в pending_rewards (source='case')
+ *  - ставим статус спина 'reward_sent'
+ */
+export const claimPrize = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // спин
+    const { data: spin, error: spinErr } = await supabase
+      .from("case_spins")
+      .select("id, user_id, chance_id, status")
+      .eq("id", id)
+      .single();
+    if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
+    if (spin.status !== "pending") {
+      return res.status(409).json({ error: "invalid state (ожидается pending)" });
+    }
+    if (!spin.chance_id) {
+      return res.status(409).json({ error: "nothing to claim (lose)" });
+    }
+
+    // шанс/приз
+    const { data: chance, error: chErr } = await supabase
+      .from("case_chance")
+      .select("id, slug, quantity")
+      .eq("id", spin.chance_id)
+      .single();
+    if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
+    if (Number(chance.quantity) <= 0) {
+      return res.status(409).json({ error: "out of stock" });
+    }
+
+    // уменьшаем quantity
+    const { error: decErr } = await supabase
+      .from("case_chance")
+      .update({ quantity: Number(chance.quantity) - 1 })
+      .eq("id", chance.id);
+    if (decErr) return res.status(500).json({ error: decErr.message });
+
+    // берём реальный подарок
+    const { data: gift, error: giftErr } = await supabase
+      .from("gifts_for_cases")
+      .select("pending_id, nft_number, msg_id, slug, nft_name, transfer_stars, link")
+      .eq("slug", chance.slug)
+      .eq("used", false)
+      .limit(1)
+      .single();
+    if (giftErr || !gift) return res.status(409).json({ error: "no available gift" });
+
+    // помечаем used=true
+    const { error: markErr } = await supabase
+      .from("gifts_for_cases")
+      .update({ used: true })
+      .eq("pending_id", gift.pending_id);
+    if (markErr) return res.status(500).json({ error: markErr.message });
+
+    // кладём в очередь на отправку
+    const { error: prErr } = await supabase.from("pending_rewards").insert([{
+      source: "case",
+      spin_id: spin.id,
+      winner_id: spin.user_id,
+      telegram_id: null, // при желании можно подставить
+      username: null,    // при желании можно подставить
+      nft_name: gift.nft_name,
+      nft_number: gift.nft_number,
+      slug: gift.slug,
+      msg_id: gift.msg_id,
+      status: "pending",
+      created_at: new Date().toISOString()
+    }]);
+    if (prErr) return res.status(500).json({ error: prErr.message });
+
+    // статус спина
+    const { error: updErr } = await supabase
+      .from("case_spins")
+      .update({ status: "reward_sent" })
+      .eq("id", spin.id);
+    if (updErr) return res.status(500).json({ error: updErr.message });
+
+    return res.json({ status: "reward_sent" });
+  } catch {
+    return res.status(500).json({ error: "claimPrize failed" });
   }
 };
