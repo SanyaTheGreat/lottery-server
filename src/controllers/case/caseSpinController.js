@@ -256,19 +256,26 @@ export const claimPrize = async (req, res) => {
       .eq("pending_id", gift.pending_id);
     if (markErr) return res.status(500).json({ error: markErr.message });
 
+    // подтягиваем telegram_id/username победителя
+    const { data: winUser } = await supabase
+      .from("users")
+      .select("telegram_id, username")
+      .eq("id", spin.user_id)
+      .single();
+
     // кладём в очередь на отправку
     const { error: prErr } = await supabase.from("pending_rewards").insert([{
       source: "case",
       spin_id: spin.id,
       winner_id: spin.user_id,
-      telegram_id: null,
-      username: null,
+      telegram_id: winUser?.telegram_id ?? null,
+      username: winUser?.username ?? null,
       nft_name: gift.nft_name,
       nft_number: gift.nft_number,
       slug: gift.slug,
       msg_id: gift.msg_id,
       status: "pending",
-      created_at: new Date().toISOString().slice(11, 19) // HH:MM:SS
+      created_at: new Date().toISOString().slice(11, 19) // HH:MM:SS (тип time в БД)
     }]);
     if (prErr) return res.status(500).json({ error: prErr.message });
 
