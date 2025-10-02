@@ -5,73 +5,55 @@ import { v4 as uuidv4 } from "uuid";
 export const spinCase = async (req, res) => {
   try {
     const { case_id, telegram_id } = req.body;
-
     if (!case_id || !telegram_id) {
       return res.status(400).json({ error: "case_id и telegram_id обязательны" });
     }
 
-    // 1. Проверяем кейс
+    // 1) кейс активен?
     const { data: caseData, error: caseError } = await supabase
       .from("cases")
       .select("*")
       .eq("id", case_id)
       .eq("status", "active")
       .single();
+    if (caseError || !caseData) return res.status(404).json({ error: "Кейс не найден или не активен" });
 
-    if (caseError || !caseData) {
-      return res.status(404).json({ error: "Кейс не найден или не активен" });
-    }
-
-    // 2. Проверяем пользователя
+    // 2) пользователь существует?
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("telegram_id", telegram_id)
       .single();
+    if (userError || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
-    if (userError || !user) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-
+    // 3) хватает звёзд?
     if (user.stars < caseData.price) {
       return res.status(402).json({ error: `Недостаточно средств (нужно ${caseData.price} звёзд)` });
     }
 
-    // 3. Списываем оплату
-    await supabase
-      .from("users")
-      .update({ stars: user.stars - caseData.price })
-      .eq("telegram_id", telegram_id);
+    // 4) списываем оплату
+    await supabase.from("users").update({ stars: user.stars - caseData.price }).eq("telegram_id", telegram_id);
 
-    // 4. Получаем предметы кейса
+    // 5) берём активные предметы кейса
     const { data: items, error: itemsError } = await supabase
       .from("case_items")
       .select("*")
       .eq("case_id", case_id)
       .eq("active", true);
+    if (itemsError || !items?.length) return res.status(400).json({ error: "В кейсе нет предметов" });
 
-    if (itemsError || !items?.length) {
-      return res.status(400).json({ error: "В кейсе нет предметов" });
-    }
-
-    // 5. RNG выбор предмета
-    const weightsSum = items.reduce((sum, i) => sum + Number(i.weight), 0);
+    // 6) RNG
+    const weightsSum = items.reduce((s, i) => s + Number(i.weight), 0);
     const rng = Math.random() * weightsSum;
-
-    let selectedItem = null;
-    let cumulative = 0;
-    for (const item of items) {
-      cumulative += Number(item.weight);
-      if (rng <= cumulative) {
-        selectedItem = item;
-        break;
-      }
+    let selectedItem = null, cumulative = 0;
+    for (const it of items) {
+      cumulative += Number(it.weight);
+      if (rng <= cumulative) { selectedItem = it; break; }
     }
 
-    // 6. Записываем спин
+    // 7) лог спина
     const spinId = uuidv4();
     const status = selectedItem ? "won" : "lose";
-
     const { data: spin, error: spinError } = await supabase
       .from("case_spins")
       .insert([{
@@ -84,13 +66,14 @@ export const spinCase = async (req, res) => {
         weights_sum: weightsSum,
         prize_slug: selectedItem?.slug || null,
         price: caseData.price,
+        // started_at есть default now() — можно не передавать, но оставить не мешает:
         started_at: new Date().toISOString()
       }])
       .select()
       .single();
+    if (spinError) return res.status(500).json({ error: spinError.message });
 
-    if (spinError) throw spinError;
-
+    // 8) ответ
     return res.json({
       spin_id: spin.id,
       status,
@@ -104,12 +87,12 @@ export const spinCase = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ Ошибка spinCase:", err);
+    console.error("❌ spinCase:", err);
     return res.status(500).json({ error: "Ошибка при спине кейса" });
   }
 };
 
-// 🏆 Получить приз
+// 🏆 Получить приз (claim)
 export const claimPrize = async (req, res) => {
   try {
     const { id } = req.params;
@@ -119,41 +102,36 @@ export const claimPrize = async (req, res) => {
       .select("*, case_items(*)")
       .eq("id", id)
       .single();
-
-    if (spinError || !spin) {
-      return res.status(404).json({ error: "Спин не найден" });
-    }
-
-    if (spin.status !== "won") {
-      return res.status(409).json({ error: "Нельзя получить приз — статус не won" });
-    }
+    if (spinError || !spin) return res.status(404).json({ error: "Спин не найден" });
+    if (spin.status !== "won") return res.status(409).json({ error: "Нельзя получить приз — статус не won" });
 
     const item = spin.case_items;
 
     if (item.type === "gift") {
-      // ищем доступный подарок
-      const { data: gift } = await supabase
+      // 1) берём любой доступный gift по slug
+      const { data: gift, error: giftErr } = await supabase
         .from("case_gifts")
         .select("*")
         .eq("used", false)
         .eq("slug", item.slug)
         .limit(1)
         .single();
+      if (giftErr || !gift) return res.status(409).json({ error: "Нет доступных подарков" });
 
-      if (!gift) {
-        return res.status(409).json({ error: "Нет доступных подарков" });
-      }
+      // 2) помечаем gift как использованный
+      const { error: updErr } = await supabase
+        .from("case_gifts")
+        .update({ used: true })
+        .eq("pending_id", gift.pending_id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
 
-      // помечаем подарок как использованный
-      await supabase.from("case_gifts").update({ used: true }).eq("pending_id", gift.pending_id);
-
-      // создаём запись в pending_rewards
-      await supabase.from("pending_rewards").insert([{
+      // 3) кладём в очередь на отправку
+      const { error: prErr } = await supabase.from("pending_rewards").insert([{
         source: "case",
         spin_id: spin.id,
         winner_id: spin.user_id,
-        telegram_id: null, // можно заполнить если есть
-        username: null, // можно заполнить если есть
+        telegram_id: null,  // если есть — подставь
+        username: null,     // если есть — подставь
         nft_name: gift.nft_name,
         nft_number: gift.nft_number,
         slug: gift.slug,
@@ -161,24 +139,27 @@ export const claimPrize = async (req, res) => {
         status: "pending",
         created_at: new Date().toISOString()
       }]);
+      if (prErr) return res.status(500).json({ error: prErr.message });
 
     } else if (item.type === "stars") {
-      // начисляем звёзды
-      await supabase.rpc("increment_user_stars", { p_user_id: spin.user_id, p_amount: item.payout_value || 10 });
+      // сразу начисляем звёзды (если есть своя процедура — замени)
+      const amount = item.payout_value || 10;
+      const { data: u } = await supabase.from("users").select("stars").eq("id", spin.user_id).single();
+      if (u) await supabase.from("users").update({ stars: (u.stars || 0) + amount }).eq("id", spin.user_id);
     }
 
-    // обновляем статус спина
+    // 4) статус спина
     await supabase.from("case_spins").update({ status: "reward_sent" }).eq("id", spin.id);
 
-    return res.json({ status: "ok", prize: item });
+    return res.json({ status: "ok", prize: { type: item.type, slug: item.slug, tier: item.tier } });
 
   } catch (err) {
-    console.error("❌ Ошибка claimPrize:", err);
+    console.error("❌ claimPrize:", err);
     return res.status(500).json({ error: "Ошибка при получении приза" });
   }
 };
 
-// 🔄 Продать приз
+// 🔄 Продать приз (reroll)
 export const rerollPrize = async (req, res) => {
   try {
     const { id } = req.params;
@@ -188,21 +169,15 @@ export const rerollPrize = async (req, res) => {
       .select("*, case_items(*)")
       .eq("id", id)
       .single();
-
-    if (spinError || !spin) {
-      return res.status(404).json({ error: "Спин не найден" });
-    }
-
-    if (spin.status !== "won") {
-      return res.status(409).json({ error: "Нельзя продать — статус не won" });
-    }
+    if (spinError || !spin) return res.status(404).json({ error: "Спин не найден" });
+    if (spin.status !== "won") return res.status(409).json({ error: "Нельзя продать — статус не won" });
 
     const item = spin.case_items;
-
-    // начисляем пользователю reroll_amount
     const rerollAmount = item.payout_value || 5;
 
-    await supabase.rpc("increment_user_stars", { p_user_id: spin.user_id, p_amount: rerollAmount });
+    // начисляем пользователю (если есть RPC — замени)
+    const { data: u } = await supabase.from("users").select("stars").eq("id", spin.user_id).single();
+    if (u) await supabase.from("users").update({ stars: (u.stars || 0) + rerollAmount }).eq("id", spin.user_id);
 
     await supabase
       .from("case_spins")
@@ -212,7 +187,7 @@ export const rerollPrize = async (req, res) => {
     return res.json({ status: "reroll", reroll_amount: rerollAmount });
 
   } catch (err) {
-    console.error("❌ Ошибка rerollPrize:", err);
+    console.error("❌ rerollPrize:", err);
     return res.status(500).json({ error: "Ошибка при продаже приза" });
   }
 };
