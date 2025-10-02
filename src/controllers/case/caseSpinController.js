@@ -268,7 +268,7 @@ export const claimPrize = async (req, res) => {
       slug: gift.slug,
       msg_id: gift.msg_id,
       status: "pending",
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString().slice(11, 19) // HH:MM:SS
     }]);
     if (prErr) return res.status(500).json({ error: prErr.message });
 
