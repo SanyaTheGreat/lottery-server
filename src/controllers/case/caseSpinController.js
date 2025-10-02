@@ -3,21 +3,21 @@ import { v4 as uuidv4 } from "uuid";
 
 /**
  * POST /api/case/spin
- * body: { case_id: uuid, telegram_id: number, pay_with: 'stars'|'ton', idempotency_key?: uuid }
+ * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'ton', idempotency_key?: uuid }
  * поведение:
- *  - списывает оплату (если stars)
+ *  - списывает оплату (если tickets)
  *  - выбирает шанс из case_chance (is_active=true, quantity>0)
  *  - если ничего нет → статус 'lose'
  *  - если есть приз → пишет спин со статусом 'pending' (для дальнейшего claim/reroll)
  */
 export const spinCase = async (req, res) => {
   try {
-    const { case_id, telegram_id, pay_with = "stars", idempotency_key } = req.body;
+    const { case_id, telegram_id, pay_with = "ton", idempotency_key } = req.body;
     if (!case_id || !telegram_id) {
       return res.status(400).json({ error: "case_id и telegram_id обязательны" });
     }
-    if (pay_with !== "stars" && pay_with !== "ton") {
-      return res.status(400).json({ error: "pay_with должен быть 'stars' или 'ton'" });
+    if (pay_with !== "tickets" && pay_with !== "ton") {
+      return res.status(400).json({ error: "pay_with должен быть 'tickets' или 'ton'" });
     }
 
     // кейс
@@ -33,25 +33,25 @@ export const spinCase = async (req, res) => {
     // пользователь
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, telegram_id, stars")
+      .select("id, telegram_id, tickets")
       .eq("telegram_id", telegram_id)
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
     // оплата
-    let pay_with_stars = null;
+    let pay_with_tickets = null;
     let pay_with_ton = null;
-    if (pay_with === "stars") {
+    if (pay_with === "tickets") {
       const price = Number(caseRow.price);
-      if ((user.stars || 0) < price) {
-        return res.status(402).json({ error: `Недостаточно звёзд (нужно ${price})` });
+      if ((user.tickets || 0) < price) {
+        return res.status(402).json({ error: `Недостаточно билетов (нужно ${price})` });
       }
       const { error: updErr } = await supabase
         .from("users")
-        .update({ stars: Number(user.stars) - price })
+        .update({ tickets: Number(user.tickets) - price })
         .eq("id", user.id);
       if (updErr) return res.status(500).json({ error: updErr.message });
-      pay_with_stars = price;
+      pay_with_tickets = price;
     } else {
       // TON — списание не через users; просто логируем сумму
       pay_with_ton = Number(caseRow.price);
@@ -80,7 +80,7 @@ export const spinCase = async (req, res) => {
           status: "lose",
           rng_roll: 0,
           weights_sum: 0,
-          pay_with_stars,
+          pay_with_tickets,
           pay_with_ton,
           reroll_amount: null,
           idempotency_key: idem
@@ -100,10 +100,9 @@ export const spinCase = async (req, res) => {
       acc += Number(c.weight);
       if (roll <= acc) { pick = c; break; }
     }
-    // на всякий случай
     if (!pick) pick = chances[chances.length - 1];
 
-    // запись спина со статусом "pending" (до решения пользователя)
+    // запись спина со статусом "pending"
     const spinId = uuidv4();
     const idem = idempotency_key || uuidv4();
     const { data: spinWin, error: spinWinErr } = await supabase
@@ -113,10 +112,10 @@ export const spinCase = async (req, res) => {
         case_id,
         user_id: user.id,
         chance_id: pick.id,
-        status: "pending",              // промежуточный статус до claim/reroll
+        status: "pending",
         rng_roll: roll,
         weights_sum: weightsSum,
-        pay_with_stars,
+        pay_with_tickets,
         pay_with_ton,
         reroll_amount: null,
         idempotency_key: idem
@@ -143,8 +142,8 @@ export const spinCase = async (req, res) => {
 
 /**
  * POST /api/case/spin/:id/reroll
- * продаём приз → начисляем payout_value звёздами, статус 'reroll'
- * ВАЖНО: quantity в case_chance НЕ уменьшаем (подарок остаётся у нас).
+ * продаём приз → начисляем payout_value билетами, статус 'reroll'
+ * ВАЖНО: quantity в case_chance НЕ уменьшаем.
  */
 export const rerollPrize = async (req, res) => {
   try {
@@ -173,12 +172,12 @@ export const rerollPrize = async (req, res) => {
 
     const payout = Number(chance.payout_value) || 0;
 
-    // начисляем звёзды пользователю
-    const { data: user } = await supabase.from("users").select("id, stars").eq("id", spin.user_id).single();
+    // начисляем билеты пользователю
+    const { data: user } = await supabase.from("users").select("id, tickets").eq("id", spin.user_id).single();
     if (user) {
       await supabase
         .from("users")
-        .update({ stars: Number(user.stars || 0) + payout })
+        .update({ tickets: Number(user.tickets || 0) + payout })
         .eq("id", spin.user_id);
     }
 
@@ -262,8 +261,8 @@ export const claimPrize = async (req, res) => {
       source: "case",
       spin_id: spin.id,
       winner_id: spin.user_id,
-      telegram_id: null, // при желании можно подставить
-      username: null,    // при желании можно подставить
+      telegram_id: null,
+      username: null,
       nft_name: gift.nft_name,
       nft_number: gift.nft_number,
       slug: gift.slug,
