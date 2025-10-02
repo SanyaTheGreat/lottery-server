@@ -98,7 +98,6 @@ export const spinCase = async (req, res) => {
       prize: selectedItem ? {
         item_id: selectedItem.id,
         type: selectedItem.type,
-        title: selectedItem.title,
         tier: selectedItem.tier,
         slug: selectedItem.slug
       } : null
