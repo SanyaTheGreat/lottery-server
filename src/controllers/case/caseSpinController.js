@@ -3,9 +3,9 @@ import { v4 as uuidv4 } from "uuid";
 
 /**
  * POST /api/case/spin
- * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'ton', idempotency_key?: uuid }
+ * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'ton'|'stars', idempotency_key?: uuid }
  * поведение:
- *  - списывает оплату (если tickets)
+ *  - списывает оплату (tickets или stars)
  *  - выбирает шанс из case_chance (is_active=true, quantity>0)
  *  - если ничего нет → статус 'lose'
  *  - если есть приз → пишет спин со статусом 'pending' (для дальнейшего claim/reroll)
@@ -16,8 +16,8 @@ export const spinCase = async (req, res) => {
     if (!case_id || !telegram_id) {
       return res.status(400).json({ error: "case_id и telegram_id обязательны" });
     }
-    if (pay_with !== "tickets" && pay_with !== "ton") {
-      return res.status(400).json({ error: "pay_with должен быть 'tickets' или 'ton'" });
+    if (!["tickets", "ton", "stars"].includes(pay_with)) {
+      return res.status(400).json({ error: "pay_with должен быть 'tickets' | 'ton' | 'stars'" });
     }
 
     // кейс
@@ -30,17 +30,17 @@ export const spinCase = async (req, res) => {
       return res.status(404).json({ error: "Кейс не найден или не активен" });
     }
 
-    // пользователь
+    // пользователь (+stars для оплаты звёздами)
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, telegram_id, tickets")
+      .select("id, telegram_id, tickets, stars")
       .eq("telegram_id", telegram_id)
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
     // оплата
-    let pay_with_tickets = null;
-    let pay_with_ton = null;
+    let pay_with_tickets = null; // лог TON-эквивалента оплаты билетами/звёздами
+    let pay_with_ton = null;     // лог прямой оплаты TON (внешняя оплата)
     if (pay_with === "tickets") {
       const price = Number(caseRow.price);
       if ((user.tickets || 0) < price) {
@@ -52,8 +52,39 @@ export const spinCase = async (req, res) => {
         .eq("id", user.id);
       if (updErr) return res.status(500).json({ error: updErr.message });
       pay_with_tickets = price;
+
+    } else if (pay_with === "stars") {
+      // узнаём курс (stars за 1 TON) из fx_rates
+      const { data: rateRow, error: rateErr } = await supabase
+        .from("fx_rates")
+        .select("stars_per_ton")
+        .eq("id", 1)
+        .single();
+      if (rateErr || !rateRow || !Number(rateRow.stars_per_ton)) {
+        return res.status(500).json({ error: "Не задан курс stars_per_ton" });
+      }
+      const starsPerTon = Number(rateRow.stars_per_ton);
+
+      const priceTon = Number(caseRow.price);
+      // Округляем вверх, чтобы исключить недоплату из-за дробных значений
+      const priceStars = Math.ceil(priceTon * starsPerTon);
+
+      if ((user.stars || 0) < priceStars) {
+        return res.status(402).json({ error: `Недостаточно звёзд (нужно ${priceStars})` });
+      }
+
+      // списываем звёзды — БД-триггер пересчитает tickets вниз автоматически
+      const { error: updErr } = await supabase
+        .from("users")
+        .update({ stars: Number(user.stars || 0) - priceStars })
+        .eq("id", user.id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+
+      // в лог оплаты спина сохраняем TON-эквивалент в pay_with_tickets (для совместимости аналитики)
+      pay_with_tickets = priceTon;
+
     } else {
-      // TON — списание не через users; просто логируем сумму
+      // TON — списание не через users; просто логируем сумму (как раньше)
       pay_with_ton = Number(caseRow.price);
     }
 
