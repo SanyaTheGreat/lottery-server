@@ -133,6 +133,34 @@ export const spinCase = async (req, res) => {
     }
     if (!pick) pick = chances[chances.length - 1];
 
+    // если выпал шанс "lose" — фиксируем проигрыш
+    if (pick.slug === "lose") {
+      const spinId = uuidv4();
+      const idem = idempotency_key || uuidv4();
+
+      const { data: spinLose, error: spinLoseErr } = await supabase
+        .from("case_spins")
+        .insert([{
+          id: spinId,
+          case_id,
+          user_id: user.id,
+          chance_id: null,
+          status: "lose",
+          rng_roll: roll,
+          weights_sum: weightsSum,
+          pay_with_tickets,
+          pay_with_ton,
+          reroll_amount: null,
+          idempotency_key: idem
+        }])
+        .select("id")
+        .single();
+
+      if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
+      return res.json({ spin_id: spinId, status: "lose" });
+    }
+
+
     // запись спина со статусом "pending"
     const spinId = uuidv4();
     const idem = idempotency_key || uuidv4();
