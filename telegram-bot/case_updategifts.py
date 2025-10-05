@@ -10,7 +10,7 @@ API_HASH = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 SESSION_NAME = "updategifts_v3"  # новое имя сессии, можно менять
 
 # username БЕЗ @ (или числовой id)
-SOURCE_PEER = "GiftsToPortals"
+SOURCE_PEER = "areeefeva"
 
 # ── Supabase ────────────────────────────────────────────────────
 SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
@@ -44,21 +44,14 @@ else:
     colors_data = {}
 
 def render_png_from_tgs(tgs_path: str, png_path: str, size: int = PNG_SIZE) -> bool:
-    """
-    Рендер первого кадра TGS → PNG.
-    Требуются пакеты: lottie, Pillow.
-    Возвращает True при успехе.
-    """
+    """Рендер первого кадра TGS → PNG (через lottie)."""
     try:
         animation = parse_tgs(tgs_path)
-        # Пытаемся через экспортёр PNG из lottie
         try:
-            # В некоторых версиях:
             from lottie.exporters import png as lottie_png
             lottie_png.export_png(animation, png_path, frame=0, width=size, height=size)
             return True
         except Exception:
-            # Фолбэк через Pillow-экспортёр (если доступен)
             try:
                 from lottie.exporters import exporters
                 exporter = exporters.get("pillow")
@@ -94,11 +87,13 @@ with app:
 
         print(f"\n✨ Обработка: {slug} (msg_id={msg_id})")
 
-        tgs_path = os.path.join(ANIMATIONS_DIR, f"{slug}.tgs")
-        json_path = os.path.join(ANIMATIONS_DIR, f"{slug}.json")
-        png_path = os.path.join(ANIMATIONS_DIR, f"{slug}.png")
+        base = os.path.join(ANIMATIONS_DIR, slug)
+        tgs_path  = base + ".tgs"
+        webm_path = base + ".webm"
+        json_path = base + ".json"
+        png_path  = base + ".png"
 
-        # Если PNG уже есть — считаем, что всё скачано/сконвертировано
+        # Если PNG и JSON уже есть — пропуск
         if os.path.exists(png_path) and os.path.exists(json_path):
             print(f"⏭️ Уже есть PNG и Lottie: {png_path}, {json_path}")
             continue
@@ -109,64 +104,110 @@ with app:
                 print("  ❌ Нет подарка в сообщении!")
                 continue
 
-            # Атрибуты
+            # 1) Пытаемся как раньше: attributes -> MODEL.sticker
             attrs = getattr(message.gift, "attributes", []) or []
             model_attr = next((a for a in attrs if getattr(getattr(a, "type", None), "name", "") == "MODEL"), None)
             backdrop_attr = next((a for a in attrs if getattr(getattr(a, "type", None), "name", "") == "BACKDROP"), None)
 
-            if not model_attr or not hasattr(model_attr, "sticker") or not getattr(model_attr.sticker, "file_id", None):
-                print("  ❌ Нет MODEL.sticker — нечего скачивать")
+            sticker_obj = None
+            sticker_source = None
+
+            if model_attr and getattr(model_attr, "sticker", None):
+                sticker_obj = model_attr.sticker
+                sticker_source = "MODEL.sticker"
+            # 2) ФОЛЛБЭК: обычные (рыночные) подарки → gift.sticker
+            elif getattr(message.gift, "sticker", None):
+                sticker_obj = message.gift.sticker
+                sticker_source = "gift.sticker"
+
+            if not sticker_obj or not getattr(sticker_obj, "file_id", None):
+                print("  ❌ Нет sticker.file_id ни в MODEL.sticker, ни в gift.sticker — нечего скачивать")
                 continue
 
-            # 2) Скачиваем .tgs
-            file_id = model_attr.sticker.file_id
-            if not os.path.exists(tgs_path):
-                app.download_media(file_id, file_name=tgs_path)
-                print(f"  ✅ Скачан: {tgs_path}")
-            else:
-                print(f"  ⏭️ Уже есть TGS: {tgs_path}")
+            mime = (getattr(sticker_obj, "mime_type", "") or "").lower()
+            file_id = sticker_obj.file_id
+            print(f"  ℹ Источник стикера: {sticker_source} | mime={mime or 'unknown'}")
 
-            # 3) Конвертируем .tgs → .json
-            if not os.path.exists(json_path):
-                try:
-                    animation = parse_tgs(tgs_path)
-                    with open(json_path, "w", encoding="utf-8") as out:
-                        json.dump(animation.to_dict(), out, ensure_ascii=False, indent=2)
-                    print(f"  ✅ Конвертирован в: {json_path}")
-                except Exception as conv_err:
-                    print(f"  ⚠ Ошибка при конвертации .tgs: {conv_err}")
-            else:
-                print(f"  ⏭️ Уже есть Lottie: {json_path}")
-
-            # 4) PNG: сначала пробуем взять thumbnail стикера
-            png_done = False
-            sticker = model_attr.sticker
-            thumb_file_id = None
-
-            # Pyrogram может давать thumb или thumbs
-            if getattr(sticker, "thumb", None):
-                thumb_file_id = sticker.thumb.file_id
-            elif getattr(sticker, "thumbs", None):
-                thumbs = sticker.thumbs or []
-                if thumbs:
-                    thumb_file_id = thumbs[0].file_id
-
-            if thumb_file_id:
-                try:
-                    app.download_media(thumb_file_id, file_name=png_path)
-                    print(f"  ✅ PNG (thumbnail): {png_path}")
-                    png_done = True
-                except Exception as e_dl:
-                    print(f"  ⚠ Не удалось скачать thumbnail: {e_dl}")
-
-            # если thumbnail нет/не скачался — рендерим из TGS первый кадр
-            if not png_done:
-                if render_png_from_tgs(tgs_path, png_path, PNG_SIZE):
-                    print(f"  ✅ PNG (rendered): {png_path}")
+            # ── Ветка А: TGS (application/x-tgsticker)
+            is_tgs = "x-tgsticker" in mime or file_id.endswith(".tgs")  # на всякий
+            if is_tgs:
+                # 2) Скачиваем .tgs
+                if not os.path.exists(tgs_path):
+                    app.download_media(file_id, file_name=tgs_path)
+                    print(f"  ✅ Скачан: {tgs_path}")
                 else:
-                    print("  ❌ PNG не удалось получить (ни thumbnail, ни рендер)")
+                    print(f"  ⏭️ Уже есть TGS: {tgs_path}")
 
-            # 5) Цвета BACKDROP
+                # 3) Конвертируем .tgs → .json
+                if not os.path.exists(json_path):
+                    try:
+                        animation = parse_tgs(tgs_path)
+                        with open(json_path, "w", encoding="utf-8") as out:
+                            json.dump(animation.to_dict(), out, ensure_ascii=False, indent=2)
+                        print(f"  ✅ Конвертирован в: {json_path}")
+                    except Exception as conv_err:
+                        print(f"  ⚠ Ошибка при конвертации .tgs: {conv_err}")
+                else:
+                    print(f"  ⏭️ Уже есть Lottie: {json_path}")
+
+                # 4) PNG: thumbnail → render
+                png_done = False
+                thumb_file_id = None
+                if getattr(sticker_obj, "thumb", None):
+                    thumb_file_id = sticker_obj.thumb.file_id
+                elif getattr(sticker_obj, "thumbs", None):
+                    thumbs = sticker_obj.thumbs or []
+                    if thumbs:
+                        thumb_file_id = thumbs[0].file_id
+
+                if thumb_file_id:
+                    try:
+                        app.download_media(thumb_file_id, file_name=png_path)
+                        print(f"  ✅ PNG (thumbnail): {png_path}")
+                        png_done = True
+                    except Exception as e_dl:
+                        print(f"  ⚠ Не удалось скачать thumbnail: {e_dl}")
+
+                if not png_done:
+                    if render_png_from_tgs(tgs_path, png_path, PNG_SIZE):
+                        print(f"  ✅ PNG (rendered): {png_path}")
+                    else:
+                        print("  ❌ PNG не удалось получить (ни thumbnail, ни рендер)")
+
+            # ── Ветка B: WEBM (video/webm — видео-стикер)
+            else:
+                if not os.path.exists(webm_path):
+                    app.download_media(file_id, file_name=webm_path)
+                    print(f"  ✅ Скачан: {webm_path}")
+                else:
+                    print(f"  ⏭️ Уже есть WEBM: {webm_path}")
+
+                # Попытка PNG из thumbnail, если телега его отдаёт
+                png_done = False
+                thumb_file_id = None
+                if getattr(sticker_obj, "thumb", None):
+                    thumb_file_id = sticker_obj.thumb.file_id
+                elif getattr(sticker_obj, "thumbs", None):
+                    thumbs = sticker_obj.thumbs or []
+                    if thumbs:
+                        thumb_file_id = thumbs[0].file_id
+                if thumb_file_id:
+                    try:
+                        app.download_media(thumb_file_id, file_name=png_path)
+                        print(f"  ✅ PNG (thumbnail): {png_path}")
+                        png_done = True
+                    except Exception as e_dl:
+                        print(f"  ⚠ Не удалось скачать thumbnail: {e_dl}")
+                if not png_done:
+                    print("  ℹ WEBM без thumbnail: PNG не формируем (нужен ffmpeg, можно добавить позже)")
+
+                # для WEBM лотти JSON не делаем
+                if os.path.exists(json_path):
+                    pass
+                else:
+                    print("  ℹ Lottie JSON не создаётся для WEBM")
+
+            # 5) Цвета BACKDROP (только если есть)
             if backdrop_attr:
                 colors_data[slug] = {
                     "center_color": f"#{backdrop_attr.center_color:06x}",
@@ -183,4 +224,4 @@ with app:
 with open(COLORS_FILE, "w", encoding="utf-8") as f:
     json.dump(colors_data, f, ensure_ascii=False, indent=2)
 
-print("\n✅ Готово! Анимации (.tgs, .json), PNG и цвета сохранены.")
+print("\n✅ Готово! Стикеры (.tgs/.webm), Lottie (.json для TGS), PNG (thumbnail/рендер) и цвета сохранены.")

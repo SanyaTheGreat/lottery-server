@@ -297,8 +297,8 @@ export const rerollPrize = async (req, res) => {
  * POST /api/case/spin/:id/claim
  * выдаём приз:
  *  - уменьшаем quantity в case_chance на 1
- *  - ищем реальный подарок в gifts_for_cases по slug (used=false)
- *  - помечаем его used=true
+ *  - ищем реальный подарок в gifts_for_cases по slug
+ *  - если подарок бесконечный (is_infinite=true) — НЕ помечаем used
  *  - создаём запись в pending_rewards (source='case')
  *  - ставим статус спина 'reward_sent'
  */
@@ -338,22 +338,28 @@ export const claimPrize = async (req, res) => {
       .eq("id", chance.id);
     if (decErr) return res.status(500).json({ error: decErr.message });
 
-    // берём реальный подарок
+    // берём реальный подарок:
+    //  - приоритет: записи с is_infinite=true (шаблон бесконечного приза)
+    //  - иначе — первый неиспользованный used=false
     const { data: gift, error: giftErr } = await supabase
       .from("gifts_for_cases")
-      .select("pending_id, nft_number, msg_id, slug, nft_name, transfer_stars, link")
+      .select("pending_id, nft_number, msg_id, slug, nft_name, transfer_stars, link, is_infinite, used")
       .eq("slug", chance.slug)
-      .eq("used", false)
+      .order("is_infinite", { ascending: false })
+      .order("used", { ascending: true })
       .limit(1)
       .single();
+
     if (giftErr || !gift) return res.status(409).json({ error: "no available gift" });
 
-    // помечаем used=true
-    const { error: markErr } = await supabase
-      .from("gifts_for_cases")
-      .update({ used: true })
-      .eq("pending_id", gift.pending_id);
-    if (markErr) return res.status(500).json({ error: markErr.message });
+    // если это не бесконечный — помечаем used=true (старое поведение)
+    if (!gift.is_infinite) {
+      const { error: markErr } = await supabase
+        .from("gifts_for_cases")
+        .update({ used: true })
+        .eq("pending_id", gift.pending_id);
+      if (markErr) return res.status(500).json({ error: markErr.message });
+    }
 
     // подтягиваем телеграм победителя
     const { data: winUser } = await supabase
