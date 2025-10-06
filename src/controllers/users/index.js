@@ -8,3 +8,4 @@ export { default as createSell } from './sell.js';
 export { default as getTicketPurchases } from './getTicketPurchases.js'
 export { default as handleTransaction } from './processPurchase.js';
 export { default as withdrawReferral } from './withdrawReferral.js';
+export { default as getLeaderboard } from './leaderboard.js';
