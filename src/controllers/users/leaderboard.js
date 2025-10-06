@@ -53,10 +53,9 @@ const getLeaderboard = async (req, res) => {
     // Забираем поля, которые пригодятся фронту: место + идентификаторы анимации (nft_name/slug)
     const { data: rawPrizes, error: prizesError } = await supabase
       .from('gifts_for_cases')
-      .select('spender_place, top_spenders, nft_name, slug')
-      .or('spender_place.in.(1,2,3),top_spenders.in.(1,2,3)')
+      .select('spender_place, nft_name, slug')
+      .in('spender_place', [1, 2, 3])
       .order('spender_place', { ascending: true })
-      .order('top_spenders', { ascending: true });
     if (prizesError) throw prizesError;
 
     // Нормализуем: приводим к одному полю place и убираем дубли
