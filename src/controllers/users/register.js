@@ -1,5 +1,5 @@
 import { supabase } from '../../services/supabaseClient.js';
-import { beginCell } from '@ton/ton'; // добавьте импорт для beginCell
+import { beginCell } from '@ton/ton';
 
 // Функция для преобразования base64 в base64url без паддинга
 function toBase64Url(base64) {
@@ -15,15 +15,18 @@ const addUser = async (req, res) => {
     return res.status(400).json({ error: 'Username and Telegram ID are required' });
   }
 
+  // Проверяем, есть ли уже пользователь
   const { data: existingUser, error: checkError } = await supabase
     .from('users')
-    .select('id, referred_by')
+    .select('id')
     .eq('telegram_id', telegram_id)
-    .limit(1);
+    .limit(1)
+    .maybeSingle();
 
-  if (checkError) return res.status(500).json({ error: 'Database check failed' });
-  if (existingUser && existingUser.length > 0)
-    return res.status(409).json({ error: 'User already exists' });
+  if (checkError) {
+    console.error('❌ Database check failed:', checkError.message);
+    return res.status(500).json({ error: 'Database check failed' });
+  }
 
   let referred_by = null;
 
@@ -32,21 +35,22 @@ const addUser = async (req, res) => {
       .from('users')
       .select('id')
       .eq('telegram_id', referrer_id)
-      .limit(1);
+      .limit(1)
+      .maybeSingle();
 
-    if (referrer && referrer[0]) referred_by = referrer[0].id;
+    if (referrer) referred_by = referrer.id;
   }
 
   // Генерация payload в формате base64url без паддинга
   const cell = beginCell()
-    .storeUint(0, 32) // префикс (32 нуля)
+    .storeUint(0, 32)
     .storeStringTail(`${telegram_id}`)
     .endCell();
 
   const base64 = cell.toBoc().toString('base64');
   const payload = toBase64Url(base64);
 
-  const newUser = {
+  const newUserData = {
     telegram_id,
     username,
     wallet: wallet || null,
@@ -56,18 +60,41 @@ const addUser = async (req, res) => {
     ...(referred_by && { referred_by }),
   };
 
+  // ✅ Если пользователь уже существует → обновляем username и avatar_url
+  if (existingUser) {
+    const { data: updated, error: updateError } = await supabase
+      .from('users')
+      .update({
+        username,
+        avatar_url: avatar_url || null,
+      })
+      .eq('telegram_id', telegram_id)
+      .select();
+
+    if (updateError) {
+      console.error('❌ Ошибка обновления:', updateError.message);
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    return res.status(200).json({
+      message: 'User already existed — username updated',
+      user: updated?.[0] || null,
+    });
+  }
+
+  // 🚀 Если нет — создаём нового
   const { data, error } = await supabase
     .from('users')
-    .insert([newUser])
+    .insert([newUserData])
     .select();
 
   if (error) {
-    console.error("❌ Ошибка вставки в Supabase:", error.message);
+    console.error('❌ Ошибка вставки в Supabase:', error.message);
     return res.status(500).json({ error: error.message });
   }
 
   res.status(201).json({
-    message: 'User registered',
+    message: 'User registered successfully',
     user: data?.[0] || null,
   });
 };
