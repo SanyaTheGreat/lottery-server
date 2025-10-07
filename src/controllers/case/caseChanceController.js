@@ -12,7 +12,7 @@ export const addCaseChance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("case_chance")
-      .insert([{ case_id, nft_name, weight, price, payout_value, quantity, is_active }])
+      .insert([{ case_id, nft_name, percent, slug, weight, price, payout_value, quantity, is_active }])
       .select("*")
       .single();
 
@@ -30,7 +30,7 @@ export const getCaseChance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("case_chance")
-      .select("id, nft_name, weight, price, payout_value, quantity, is_active")
+      .select("id, nft_name, percent, slug, weight, price, payout_value, quantity, is_active")
       .eq("case_id", case_id)
       .order("nft_name", { ascending: true });
 
