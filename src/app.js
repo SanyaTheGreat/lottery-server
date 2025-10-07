@@ -31,9 +31,12 @@ const app = express()
 const port = 3000
 
 app.use(cors({
-  origin: 'https://frontend-nine-sigma-49.vercel.app',
+  origin: ['https://frontend-nine-sigma-49.vercel.app',
+  'https://t.me',
+  ],
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
   allowedHeaders: ['Content-Type'],
+  credentials: true,
 }))
 
 // важно для приёма JSON от Telegram
