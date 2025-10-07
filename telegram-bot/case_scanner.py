@@ -14,7 +14,7 @@ api_hash = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 session_name = "storagescan_v2"  # новый файл сессии, можно менять
 
 # Чат-источник подарков (второй аккаунт)
-SECOND_USER_ID = "areeefeva"       # можно заменить на username, например "fightforgift"
+SECOND_USER_ID = "giftstoportals"       # можно заменить на username, например "fightforgift"
 
 # --- Supabase ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://djpcftyqkwucbksknsdu.supabase.co")

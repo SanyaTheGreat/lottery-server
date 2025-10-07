@@ -10,7 +10,7 @@ API_HASH = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 SESSION_NAME = "updategifts_v3"  # новое имя сессии, можно менять
 
 # username БЕЗ @ (или числовой id)
-SOURCE_PEER = "areeefeva"
+SOURCE_PEER = "giftstoportals"
 
 # ── Supabase ────────────────────────────────────────────────────
 SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
