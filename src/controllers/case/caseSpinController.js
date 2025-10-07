@@ -83,7 +83,7 @@ export const spinCase = async (req, res) => {
     // активные шансы с запасом
     const { data: chances, error: chErr } = await supabase
       .from("case_chance")
-      .select("id, nft_name, weight, price, payout_value, quantity, is_active")
+      .select("id, nft_name, weight, percent, price, payout_value, quantity, is_active")
       .eq("case_id", case_id)
       .eq("is_active", true)
       .gt("quantity", 0);
