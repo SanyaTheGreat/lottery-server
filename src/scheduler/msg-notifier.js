@@ -7,7 +7,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://frontend-nine-sigma-49.vercel.app';
 
 // ЖЁСТКИЕ НАСТРОЙКИ (без ENV)
-const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 час
+const CHECK_INTERVAL_MS = 10000; 
 const RATE_DELAY_MS = 60;                 // 60 мс между сообщениями (~16–17 msg/sec)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

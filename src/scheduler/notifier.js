@@ -47,7 +47,7 @@ async function notifyWheel(wheel) {
     try {
       await sendMessage(
         chatId,
-        `${username}! Your game for a prize ${nft_name} will start in 1 minute! 🎁`,
+        `${username}! Твой розыгрыш на ${nft_name} скоро начнется! Не забудь написать @fightforgift для получения подарка. `,
         reply_markup
       );
       // небольшая пауза, чтобы не упереться в лимиты
