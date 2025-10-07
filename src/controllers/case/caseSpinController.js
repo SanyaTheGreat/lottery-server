@@ -4,6 +4,11 @@ import { v4 as uuidv4 } from "uuid";
 /**
  * POST /api/case/spin
  * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'stars', idempotency_key?: uuid }
+ * поведение:
+ *  - списывает оплату (tickets или stars)
+ *  - выбирает шанс из case_chance (is_active=true, quantity>0)
+ *  - если выпадает nft_name='lose' → статус 'lose'
+ *  - если приз → пишет спин со статусом 'pending'
  */
 export const spinCase = async (req, res) => {
   try {
@@ -73,7 +78,7 @@ export const spinCase = async (req, res) => {
       pay_with_tickets = priceTon;
     }
 
-    // активные шансы
+    // активные шансы с запасом
     const { data: chances, error: chErr } = await supabase
       .from("case_chance")
       .select("id, nft_name, weight, price, payout_value, quantity, is_active")
@@ -97,7 +102,7 @@ export const spinCase = async (req, res) => {
           weights_sum: 0,
           pay_with_tickets,
           pay_with_ton,
-          pay_with,
+          pay_with: (pay_with === "stars" ? "stars" : "tickets"),
           reroll_amount: null,
           idempotency_key: idem
         }])
@@ -118,7 +123,7 @@ export const spinCase = async (req, res) => {
     }
     if (!pick) pick = chances[chances.length - 1];
 
-    // если выпал "lose"
+    // если выпал шанс "lose" — фиксируем проигрыш
     if (pick.nft_name === "lose") {
       const spinId = uuidv4();
       const idem = idempotency_key || uuidv4();
@@ -134,7 +139,7 @@ export const spinCase = async (req, res) => {
           weights_sum: weightsSum,
           pay_with_tickets,
           pay_with_ton,
-          pay_with,
+          pay_with: (pay_with === "stars" ? "stars" : "tickets"),
           reroll_amount: null,
           idempotency_key: idem
         }]);
@@ -142,7 +147,7 @@ export const spinCase = async (req, res) => {
       return res.json({ spin_id: spinId, status: "lose" });
     }
 
-    // запись спина
+    // запись спина со статусом "pending"
     const spinId = uuidv4();
     const idem = idempotency_key || uuidv4();
     const { data: spinWin, error: spinWinErr } = await supabase
@@ -157,7 +162,7 @@ export const spinCase = async (req, res) => {
         weights_sum: weightsSum,
         pay_with_tickets,
         pay_with_ton,
-        pay_with,
+        pay_with: (pay_with === "stars" ? "stars" : "tickets"),
         reroll_amount: null,
         idempotency_key: idem
       }])
@@ -178,6 +183,98 @@ export const spinCase = async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ error: "spinCase failed" });
+  }
+};
+
+/**
+ * POST /api/case/spin/:id/reroll
+ */
+export const rerollPrize = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: spin, error: spinErr } = await supabase
+      .from("case_spins")
+      .select("id, user_id, chance_id, status, pay_with")
+      .eq("id", id)
+      .single();
+    if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
+    if (spin.status !== "pending") {
+      return res.status(409).json({ error: "invalid state (ожидается pending)" });
+    }
+    if (!spin.chance_id) {
+      return res.status(409).json({ error: "nothing to reroll (lose)" });
+    }
+    const payWith = spin.pay_with === "stars" ? "stars" : "tickets";
+
+    const { data: chance, error: chErr } = await supabase
+      .from("case_chance")
+      .select("id, payout_value, payout_stars")
+      .eq("id", spin.chance_id)
+      .single();
+    if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
+
+    const { data: user, error: userErr } = await supabase
+      .from("users")
+      .select("id, stars, tickets")
+      .eq("id", spin.user_id)
+      .single();
+    if (userErr || !user) return res.status(404).json({ error: "user not found" });
+
+    let reroll_amount_stars = null;
+    let reroll_amount_tickets = null;
+
+    if (payWith === "stars") {
+      if (Number(chance.payout_stars) > 0) {
+        reroll_amount_stars = Number(chance.payout_stars);
+      } else {
+        const { data: rateRow, error: rateErr } = await supabase
+          .from("fx_rates")
+          .select("stars_per_ton")
+          .eq("id", 1)
+          .single();
+        if (rateErr || !rateRow) return res.status(500).json({ error: "Не задан курс stars_per_ton" });
+        const starsPerTon = Number(rateRow.stars_per_ton || 0);
+        reroll_amount_stars = Math.max(0, Math.ceil((Number(chance.payout_value) || 0) * starsPerTon));
+      }
+
+      const { error: updErr } = await supabase
+        .from("users")
+        .update({ stars: Number(user.stars || 0) + reroll_amount_stars })
+        .eq("id", user.id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+
+    } else {
+      reroll_amount_tickets = Number(chance.payout_value) || 0;
+      const { error: updErr } = await supabase
+        .from("users")
+        .update({ tickets: Number(user.tickets || 0) + reroll_amount_tickets })
+        .eq("id", user.id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+    }
+
+    const { error: updSpinErr } = await supabase
+      .from("case_spins")
+      .update({
+        status: "reroll",
+        reroll_amount: reroll_amount_tickets ?? null
+      })
+      .eq("id", spin.id);
+    if (updSpinErr) return res.status(500).json({ error: updSpinErr.message });
+
+    const message = payWith === "stars"
+      ? `Обменять этот подарок на ${reroll_amount_stars} ⭐?`
+      : `Обменять этот подарок на ${reroll_amount_tickets} TON?`;
+
+    return res.json({
+      status: "reroll",
+      pay_with: payWith,
+      reroll_amount_stars,
+      reroll_amount_tickets,
+      message
+    });
+  } catch {
+    return res.status(500).json({ error: "rerollPrize failed" });
   }
 };
 
@@ -217,7 +314,6 @@ export const claimPrize = async (req, res) => {
       .eq("id", chance.id);
     if (decErr) return res.status(500).json({ error: decErr.message });
 
-    // берём случайный подарок по nft_name
     const { data: availableGifts, error: giftErr } = await supabase
       .from("gifts_for_cases")
       .select("pending_id, nft_number, msg_id, nft_name, transfer_stars, link, is_infinite, used")
