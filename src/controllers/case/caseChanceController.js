@@ -4,15 +4,40 @@ import { supabase } from "../../services/supabaseClient.js";
 export const addCaseChance = async (req, res) => {
   try {
     const { case_id } = req.params;
-    const { slug, weight, price, payout_value, quantity = 0, is_active = true } = req.body;
+    const {
+      nft_name,
+      slug,
+      weight,
+      price,
+      payout_value,
+      payout_stars = null,
+      quantity = 0,
+      percent = null,
+      is_active = true,
+    } = req.body;
 
-    if (!case_id || !slug || weight === undefined || price === undefined || payout_value === undefined) {
-      return res.status(400).json({ error: "case_id, nft_name, weight, price, payout_value обязательны" });
+    if (!case_id || !slug || !nft_name || weight === undefined || price === undefined || payout_value === undefined) {
+      return res.status(400).json({
+        error: "case_id, nft_name, slug, weight, price, payout_value обязательны",
+      });
     }
 
     const { data, error } = await supabase
       .from("case_chance")
-      .insert([{ case_id, nft_name, percent, slug, weight, price, payout_value, quantity, is_active }])
+      .insert([
+        {
+          case_id,
+          nft_name,
+          slug,
+          weight,
+          price,
+          payout_value,
+          payout_stars,
+          quantity,
+          percent,
+          is_active,
+        },
+      ])
       .select("*")
       .single();
 
@@ -30,7 +55,7 @@ export const getCaseChance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("case_chance")
-      .select("id, nft_name, percent, slug, weight, price, payout_value, quantity, is_active")
+      .select("id, nft_name, percent, slug, weight, price, payout_value, payout_stars, quantity, is_active")
       .eq("case_id", case_id)
       .order("nft_name", { ascending: true });
 
