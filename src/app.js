@@ -12,6 +12,7 @@ import paymentsRoutes from './routes/payments.js';
 import casesRoutes from "./routes/casesRoutes.js";
 import caseChanceRoutes from "./routes/caseChanceRoutes.js";
 import caseSpinRoutes from "./routes/caseSpinRoutes.js";
+import inventoryRoutes from "./routes/inventoryRoutes.js";
 
 // фоновые задачи
 import './checkTonTransactions.js'   // сканер TON
@@ -50,6 +51,7 @@ app.use('/payments', paymentsRoutes);
 app.use("/api", casesRoutes);
 app.use("/api", caseChanceRoutes);
 app.use("/api", caseSpinRoutes)
+app.use("/api", inventoryRoutes);
 
 // --- Telegram webhook ---
 // Telegram будет слать POST запросы сюда
