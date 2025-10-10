@@ -302,6 +302,12 @@ export const rerollPrize = async (req, res) => {
  *  - создаём запись в pending_rewards (source='case')
  *  - ставим статус спина 'reward_sent'
  */
+/**
+ * POST /api/case/spin/:id/claim
+ * Если nft_name указывает на звездный приз (например, "2 звезды", "5 ⭐", "5 stars"),
+ * то зачисляем звезды во внутренний баланс и НЕ кладём в pending_rewards.
+ * Иначе — старая логика с gifts_for_cases.
+ */
 export const claimPrize = async (req, res) => {
   try {
     const { id } = req.params;
@@ -330,6 +336,58 @@ export const claimPrize = async (req, res) => {
     if (Number(chance.quantity) <= 0) {
       return res.status(409).json({ error: "out of stock" });
     }
+
+    // --- ПРАВИЛО ДЛЯ ЗВЁЗД ПО НАЗВАНИЮ nft_name ---
+    // Пытаемся извлечь число звёзд из названия: "2 звезды", "5 звезд", "3 ⭐", "4 stars" и т.д.
+    const name = String(chance.nft_name || "").trim().toLowerCase();
+
+    // 1) быстрая проверка: есть ли признак звёзд
+    const looksLikeStars =
+      name.includes("звезд") || name.includes("звезды") || name.includes("звезда") ||
+      name.includes("star") || name.includes("⭐");
+
+    // 2) извлекаем число (первое число в названии)
+    let starsPrize = 0;
+    if (looksLikeStars) {
+      const matchNum = name.match(/(\d+)/); // первое число
+      if (matchNum) starsPrize = Number(matchNum[1]);
+    }
+
+    if (starsPrize > 0) {
+      // пользователь
+      const { data: user, error: userErr } = await supabase
+        .from("users")
+        .select("id, stars")
+        .eq("id", spin.user_id)
+        .single();
+      if (userErr || !user) return res.status(404).json({ error: "user not found" });
+
+      // 1) зачисляем звезды во внутренний баланс
+      const { error: addErr } = await supabase
+        .from("users")
+        .update({ stars: Number(user.stars || 0) + starsPrize })
+        .eq("id", user.id);
+      if (addErr) return res.status(500).json({ error: addErr.message });
+
+      // 2) уменьшаем quantity у шанса
+      const { error: decErr } = await supabase
+        .from("case_chance")
+        .update({ quantity: Number(chance.quantity) - 1 })
+        .eq("id", chance.id);
+      if (decErr) return res.status(500).json({ error: decErr.message });
+
+      // 3) помечаем спин завершённым (без pending_rewards)
+      const { error: updErr } = await supabase
+        .from("case_spins")
+        .update({ status: "reward_sent" })
+        .eq("id", spin.id);
+      if (updErr) return res.status(500).json({ error: updErr.message });
+
+      return res.json({ status: "reward_sent" });
+    }
+    // --- конец правила для звёзд ---
+
+    // ===== СТАРАЯ ЛОГИКА С РЕАЛЬНЫМИ ПОДАРКАМИ =====
 
     // 1) ищем доступный подарок по nft_name (случайный один экземпляр)
     const { data: availableGifts, error: giftErr } = await supabase
