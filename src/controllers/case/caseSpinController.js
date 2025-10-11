@@ -4,11 +4,6 @@ import { v4 as uuidv4 } from "uuid";
 /**
  * POST /api/case/spin
  * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'stars', idempotency_key?: uuid }
- * поведение:
- *  - списывает оплату (tickets или stars)
- *  - выбирает шанс из case_chance (is_active=true, quantity>0)
- *  - если выпадает nft_name='lose' → статус 'lose'
- *  - если приз → пишет спин со статусом 'pending'
  */
 export const spinCase = async (req, res) => {
   try {
@@ -33,10 +28,10 @@ export const spinCase = async (req, res) => {
       return res.status(403).json({ error: "Оплата звёздами запрещена для этого кейса" });
     }
 
-    // пользователь
+    // пользователь (+ referred_by для рефералок)
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, telegram_id, tickets, stars, referred_by") // ← добавили referred_by
+      .select("id, telegram_id, tickets, stars, referred_by")
       .eq("telegram_id", telegram_id)
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
@@ -80,23 +75,36 @@ export const spinCase = async (req, res) => {
       pay_with_tickets = priceTon; // лог: эквивалент в TON
     }
 
-    // === Реферальные 10% (TON) ===
+    // === Реферальные отчисления 10% от цены кейса (TON) ===
     try {
-      const referrerId = user?.referred_by || null;
-      const refAmountTon = Number(caseRow?.price || 0) * 0.10;
+      const referrerId = user.referred_by || null;
+      const refAmountTon = Number(caseRow.price || 0) * 0.10;
       if (referrerId && refAmountTon > 0) {
+        // журнал
+        await supabase.from("referral_earnings").insert([{
+          referrer_id: referrerId,
+          referred_id: user.id,
+          wheel_id: null,
+          amount: refAmountTon
+        }]);
+
+        // инкремент users.referral_earnings
+        const { data: refUser } = await supabase
+          .from("users")
+          .select("referral_earnings")
+          .eq("id", referrerId)
+          .single();
+
+        const current = Number(refUser?.referral_earnings || 0);
         await supabase
           .from("users")
-          .update({
-            // прибавляем к текущему referral_earnings
-            referral_earnings: supabase.sql`coalesce(referral_earnings, 0) + ${refAmountTon}`
-          })
+          .update({ referral_earnings: current + refAmountTon })
           .eq("id", referrerId);
       }
     } catch (e) {
       console.warn("[referral] skipped:", e?.message || e);
     }
-    // ==============================
+    // === /рефералки ===
 
     // активные шансы с запасом
     const { data: chances, error: chErr } = await supabase
@@ -209,15 +217,12 @@ export const spinCase = async (req, res) => {
 
 /**
  * POST /api/case/spin/:id/reroll
- * Продаём приз → начисляем в валюте исходной оплаты спина:
- *  - если спин был за stars → возвращаем звёзды (payout_stars, иначе конвертируем payout_value в stars)
- *  - если спин был за tickets → возвращаем TON (payout_value)
+ * Продаём приз → начисляем в валюте исходной оплаты спина
  */
 export const rerollPrize = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // спин
     const { data: spin, error: spinErr } = await supabase
       .from("case_spins")
       .select("id, user_id, chance_id, status, pay_with")
@@ -232,7 +237,6 @@ export const rerollPrize = async (req, res) => {
     }
     const payWith = spin.pay_with === "stars" ? "stars" : "tickets";
 
-    // шанс/приз
     const { data: chance, error: chErr } = await supabase
       .from("case_chance")
       .select("id, payout_value, payout_stars")
@@ -240,7 +244,6 @@ export const rerollPrize = async (req, res) => {
       .single();
     if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
 
-    // пользователь
     const { data: user, error: userErr } = await supabase
       .from("users")
       .select("id, stars, tickets")
@@ -252,11 +255,9 @@ export const rerollPrize = async (req, res) => {
     let reroll_amount_tickets = null;
 
     if (payWith === "stars") {
-      // при оплате звёздами — возвращаем звёзды
       if (Number(chance.payout_stars) > 0) {
         reroll_amount_stars = Number(chance.payout_stars);
       } else {
-        // конвертируем payout_value (TON) → в звёзды по текущему курсу
         const { data: rateRow, error: rateErr } = await supabase
           .from("fx_rates")
           .select("stars_per_ton")
@@ -274,7 +275,6 @@ export const rerollPrize = async (req, res) => {
       if (updErr) return res.status(500).json({ error: updErr.message });
 
     } else {
-      // при оплате билетами — возвращаем TON (tickets)
       reroll_amount_tickets = Number(chance.payout_value) || 0;
 
       const { error: updErr } = await supabase
@@ -284,17 +284,15 @@ export const rerollPrize = async (req, res) => {
       if (updErr) return res.status(500).json({ error: updErr.message });
     }
 
-    // статус спина
     const { error: updSpinErr } = await supabase
       .from("case_spins")
       .update({
         status: "reroll",
-        reroll_amount: reroll_amount_tickets ?? null // старое поле (TON) — для совместимости
+        reroll_amount: reroll_amount_tickets ?? null
       })
       .eq("id", spin.id);
     if (updSpinErr) return res.status(500).json({ error: updSpinErr.message });
 
-    // готовый текст для фронта
     const message = payWith === "stars"
       ? `Обменять этот подарок на ${reroll_amount_stars} ⭐?`
       : `Обменять этот подарок на ${reroll_amount_tickets} TON?`;
@@ -313,24 +311,12 @@ export const rerollPrize = async (req, res) => {
 
 /**
  * POST /api/case/spin/:id/claim
- * выдаём приз:
- *  - ищем реальный подарок в gifts_for_cases по nft_name (used=false или is_infinite=true)
- *  - если подарок конечный — помечаем used=true
- *  - уменьшаем quantity в case_chance на 1
- *  - создаём запись в pending_rewards (source='case')
- *  - ставим статус спина 'reward_sent'
- */
-/**
- * POST /api/case/spin/:id/claim
- * Если nft_name указывает на звездный приз (например, "2 звезды", "5 ⭐", "5 stars"),
- * то зачисляем звезды во внутренний баланс и НЕ кладём в pending_rewards.
- * Иначе — старая логика с gifts_for_cases.
+ * (логика без изменений)
  */
 export const claimPrize = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // спин
     const { data: spin, error: spinErr } = await supabase
       .from("case_spins")
       .select("id, user_id, chance_id, status")
@@ -344,7 +330,6 @@ export const claimPrize = async (req, res) => {
       return res.status(409).json({ error: "nothing to claim (lose)" });
     }
 
-    // шанс/приз
     const { data: chance, error: chErr } = await supabase
       .from("case_chance")
       .select("id, nft_name, quantity")
@@ -353,10 +338,8 @@ export const claimPrize = async (req, res) => {
     if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
     if (Number(chance.quantity) <= 0) {
       return res.status(409).json({ error: "out of stock" });
-
     }
 
-    // --- ПРАВИЛО ДЛЯ ЗВЁЗД ПО НАЗВАНИЮ nft_name ---
     const name = String(chance.nft_name || "").trim().toLowerCase();
     const looksLikeStars =
       name.includes("звезд") || name.includes("звезды") || name.includes("звезда") ||
@@ -381,23 +364,21 @@ export const claimPrize = async (req, res) => {
         .eq("id", user.id);
       if (addErr) return res.status(500).json({ error: addErr.message });
 
-      const { error: decErr } = await supabase
+      const { error: decErr1 } = await supabase
         .from("case_chance")
         .update({ quantity: Number(chance.quantity) - 1 })
         .eq("id", chance.id);
-      if (decErr) return res.status(500).json({ error: decErr.message });
+      if (decErr1) return res.status(500).json({ error: decErr1.message });
 
-      const { error: updErr } = await supabase
+      const { error: updErr1 } = await supabase
         .from("case_spins")
         .update({ status: "reward_sent" })
         .eq("id", spin.id);
-      if (updErr) return res.status(500).json({ error: updErr.message });
+      if (updErr1) return res.status(500).json({ error: updErr1.message });
 
       return res.json({ status: "reward_sent" });
     }
-    // --- конец правила для звёзд ---
 
-    // ===== СТАРАЯ ЛОГИКА С РЕАЛЬНЫМИ ПОДАРКАМИ =====
     const { data: availableGifts, error: giftErr } = await supabase
       .from("gifts_for_cases")
       .select("pending_id, nft_number, msg_id, nft_name, transfer_stars, link, is_infinite, used")
@@ -439,7 +420,7 @@ export const claimPrize = async (req, res) => {
       nft_number: gift.nft_number,
       msg_id: gift.msg_id,
       status: "pending",
-      created_at: new Date().toISOString().slice(11, 19) // HH:MM:SS (если в БД тип time)
+      created_at: new Date().toISOString().slice(11, 19)
     }]);
     if (prErr) return res.status(500).json({ error: prErr.message });
 
