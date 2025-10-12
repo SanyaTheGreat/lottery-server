@@ -13,6 +13,7 @@ export const addCaseChance = async (req, res) => {
       payout_stars = null,
       quantity = 0,
       percent = null,
+      chance = null,
       is_active = true,
     } = req.body;
 
@@ -34,6 +35,7 @@ export const addCaseChance = async (req, res) => {
           payout_value,
           payout_stars,
           quantity,
+          chance,
           percent,
           is_active,
         },

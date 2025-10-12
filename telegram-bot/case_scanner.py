@@ -14,7 +14,7 @@ api_hash = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 session_name = "storagescan_v2"  # новый файл сессии, можно менять
 
 # Чат-источник подарков (второй аккаунт)
-SECOND_USER_ID = "giftstoportals"       # можно заменить на username, например "fightforgift"
+SECOND_USER_ID = "myusernameSasha"       # можно заменить на username, например "fightforgift"
 
 # --- Supabase ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://djpcftyqkwucbksknsdu.supabase.co")
@@ -22,7 +22,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE = "gifts_for_cases"
-SCAN_LIMIT = 200  # сколько сообщений пролистывать
+SCAN_LIMIT = 20  # сколько сообщений пролистывать
 
 
 async def ensure_peer(app: Client, peer):
