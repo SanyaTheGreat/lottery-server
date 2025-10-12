@@ -57,7 +57,7 @@ export const getCaseChance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("case_chance")
-      .select("id, nft_name, percent, slug, weight, price, payout_value, payout_stars, quantity, is_active")
+      .select("id, nft_name, percent, slug, weight, price, payout_value,  chance, payout_stars, quantity, is_active")
       .eq("case_id", case_id)
       .order("nft_name", { ascending: true });
 
