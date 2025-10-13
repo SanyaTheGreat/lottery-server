@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 
 /**
  * POST /api/case/spin
- * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'stars', idempotency_key?: uuid }
+ * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'stars'|'free', idempotency_key?: uuid }
  */
 export const spinCase = async (req, res) => {
   try {
@@ -11,8 +11,9 @@ export const spinCase = async (req, res) => {
     if (!case_id || !telegram_id) {
       return res.status(400).json({ error: "case_id и telegram_id обязательны" });
     }
-    if (!["tickets", "stars"].includes(pay_with)) {
-      return res.status(400).json({ error: "pay_with должен быть 'tickets' или 'stars'" });
+    // ✅ добавили поддержку 'free'
+    if (!["tickets", "stars", "free"].includes(pay_with)) {
+      return res.status(400).json({ error: "pay_with должен быть 'tickets' | 'stars' | 'free'" });
     }
 
     // кейс
@@ -28,13 +29,32 @@ export const spinCase = async (req, res) => {
       return res.status(403).json({ error: "Оплата звёздами запрещена для этого кейса" });
     }
 
-    // пользователь (+ referred_by для рефералок)
+    // пользователь (+ referred_by для рефералок)  ✅ добавили free_spin_last_at
     const { data: user, error: userErr } = await supabase
       .from("users")
-      .select("id, telegram_id, tickets, stars, referred_by")
+      .select("id, telegram_id, tickets, stars, referred_by, free_spin_last_at")
       .eq("telegram_id", telegram_id)
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
+
+    // Если бесплатный спин — он доступен ТОЛЬКО для самого дешёвого активного кейса
+    let cheapestCaseId = null;
+    if (pay_with === "free") {
+      const { data: cheap, error: cheapErr } = await supabase
+        .from("cases")
+        .select("id")
+        .eq("is_active", true)
+        .order("price", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (cheapErr || !cheap?.id) {
+        return res.status(404).json({ error: "Нет доступных кейсов для бесплатного спина" });
+      }
+      cheapestCaseId = cheap.id;
+      if (cheapestCaseId !== case_id) {
+        return res.status(403).json({ error: "Бесплатный спин доступен только для самого дешёвого кейса" });
+      }
+    }
 
     // оплата
     let pay_with_tickets = null; // логируем TON-эквивалент для tickets/stars
@@ -73,6 +93,24 @@ export const spinCase = async (req, res) => {
         .eq("id", user.id);
       if (updErr) return res.status(500).json({ error: updErr.message });
       pay_with_tickets = priceTon; // лог: эквивалент в TON
+    } else if (pay_with === "free") {
+      // ✅ Бесплатный спин: проверяем 1-е пополнение и кулдаун 24ч. Ничего не списываем.
+      const { data: dep, error: derr } = await supabase
+        .from("sells")
+        .select("telegram_id, amount, amount_ton")
+        .eq("telegram_id", telegram_id)
+        .limit(1);
+      if (derr) return res.status(500).json({ error: derr.message });
+      const hasDeposit = !!(dep && dep.length && ((dep[0].amount ?? dep[0].amount_ton ?? 0) > 0));
+      if (!hasDeposit) {
+        return res.status(403).json({ error: "Бесплатный спин доступен после первого пополнения" });
+      }
+      const last = user.free_spin_last_at ? new Date(user.free_spin_last_at) : new Date(0);
+      const canFree = Date.now() >= (last.getTime() + 24 * 60 * 60 * 1000);
+      if (!canFree) {
+        return res.status(429).json({ error: "Слишком рано для бесплатного спина" });
+      }
+      // Ничего не списываем.
     }
 
     // === Реферальные отчисления 10% от цены кейса (TON) ===
@@ -131,13 +169,23 @@ export const spinCase = async (req, res) => {
           weights_sum: 0,
           pay_with_tickets,
           pay_with_ton,
-          pay_with: (pay_with === "stars" ? "stars" : "tickets"),
+          // ✅ сохраняем как есть, чтобы 'free' тоже попал
+          pay_with: pay_with,
           reroll_amount: null,
           idempotency_key: idem
         }])
         .select("id")
         .single();
       if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
+
+      // ✅ отметим использование бесплатного спина
+      if (pay_with === "free") {
+        await supabase
+          .from("users")
+          .update({ free_spin_last_at: new Date().toISOString(), free_spin_last_notified_at: null })
+          .eq("id", user.id);
+      }
+
       return res.json({ spin_id: spinLose.id, status: "lose" });
     }
 
@@ -168,11 +216,21 @@ export const spinCase = async (req, res) => {
           weights_sum: weightsSum,
           pay_with_tickets,
           pay_with_ton,
-          pay_with: (pay_with === "stars" ? "stars" : "tickets"),
+          // ✅ сохраняем как есть
+          pay_with: pay_with,
           reroll_amount: null,
           idempotency_key: idem
         }]);
       if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
+
+      // ✅ отметим использование бесплатного спина
+      if (pay_with === "free") {
+        await supabase
+          .from("users")
+          .update({ free_spin_last_at: new Date().toISOString(), free_spin_last_notified_at: null })
+          .eq("id", user.id);
+      }
+
       return res.json({ spin_id: spinId, status: "lose" });
     }
 
@@ -191,13 +249,22 @@ export const spinCase = async (req, res) => {
         weights_sum: weightsSum,
         pay_with_tickets,
         pay_with_ton,
-        pay_with: (pay_with === "stars" ? "stars" : "tickets"),
+        // ✅ сохраняем как есть
+        pay_with: pay_with,
         reroll_amount: null,
         idempotency_key: idem
       }])
       .select("id")
       .single();
     if (spinWinErr) return res.status(500).json({ error: spinWinErr.message });
+
+    // ✅ отметим использование бесплатного спина
+    if (pay_with === "free") {
+      await supabase
+        .from("users")
+        .update({ free_spin_last_at: new Date().toISOString(), free_spin_last_notified_at: null })
+        .eq("id", user.id);
+    }
 
     return res.json({
       spin_id: spinWin.id,
