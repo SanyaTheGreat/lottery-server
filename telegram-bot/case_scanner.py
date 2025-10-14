@@ -22,7 +22,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE = "gifts_for_cases"
-SCAN_LIMIT = 9  # сколько сообщений пролистывать
+SCAN_LIMIT = 3  # сколько сообщений пролистывать
 
 
 async def ensure_peer(app: Client, peer):
