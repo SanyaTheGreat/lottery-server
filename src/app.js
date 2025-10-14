@@ -19,6 +19,7 @@ import './checkTonTransactions.js'   // сканер TON
 import './scheduler/autoDraw.js'
 import './scheduler/notifier.js';
 import './scheduler/msg-notifier.js';
+import "./scheduler/freeSpinNotifier.js";
 
 
 

@@ -1,7 +1,7 @@
 // src/scheduler/notifier.js
 import { supabase } from "../services/supabaseClient.js";
 
-const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN; // тот же токен бота
+const BOT_TOKEN  = process.env.BOT_TOKEN; // тот же токен бота
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app";
 const INTERVAL_MS = 10_000; // как и в Python-версии: проверка каждые 10 сек
 
