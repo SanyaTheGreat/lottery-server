@@ -24,7 +24,7 @@ router.get('/profile/:telegram_id', getProfile);
 router.get('/referrals/:telegram_id', getReferrals);
 router.post('/withdraw', withdrawReferral);
 router.get('/leaderboard', getLeaderboard);
-router.get('/users/leaderboard-referrals', getLeaderboardReferrals);
+router.get('/leaderboard-referrals', getLeaderboardReferrals);
 
 
 
