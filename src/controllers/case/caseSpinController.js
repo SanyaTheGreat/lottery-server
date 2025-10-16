@@ -116,7 +116,7 @@ export const spinCase = async (req, res) => {
     // === Реферальные отчисления 10% от цены кейса (TON) ===
     try {
       const referrerId = user.referred_by || null;
-      const refAmountTon = Number(caseRow.price || 0) * 0.10;
+      const refAmountTon = Number(caseRow.price || 0) * 0.05;
       if (referrerId && refAmountTon > 0) {
         // журнал
         await supabase.from("referral_earnings").insert([{
