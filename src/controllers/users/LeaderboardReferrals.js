@@ -34,18 +34,16 @@ const getLeaderboardReferrals = async (req, res) => {
       me = meRow ? { ...meRow, total_spent: meRow.ref_count } : null;
     }
 
-    // --- Призы для топ-3 (если одинаковые, можно оставить spender_place)
+    // --- Призы для топ-3 по рефералам (новая колонка) ---
     const { data: rawPrizes, error: prizesError } = await supabase
       .from('gifts_for_cases')
-      .select('spender_place, nft_name, slug')
-      .in('spender_place', [4, 5, 6])
-      .order('spender_place', { ascending: true });
+      .select('spender_place_ref, nft_name, slug')
+      .in('spender_place_ref', [1, 2, 3])
+      .order('spender_place_ref', { ascending: true });
     if (prizesError) throw prizesError;
 
-    const map = { 4: 1, 5: 2, 6: 3 }; // маппим на привычные места для фронта
-
     const prizes = (rawPrizes || []).map(p => ({
-      place: map[p.spender_place] ?? 3,
+      place: p.spender_place_ref,
       nft_name: p.nft_name ?? null,
       slug: p.slug ?? null,
     }));
