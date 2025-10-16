@@ -38,12 +38,14 @@ const getLeaderboardReferrals = async (req, res) => {
     const { data: rawPrizes, error: prizesError } = await supabase
       .from('gifts_for_cases')
       .select('spender_place, nft_name, slug')
-      .in('spender_place', [1, 2, 3])
+      .in('spender_place', [4, 5, 6])
       .order('spender_place', { ascending: true });
     if (prizesError) throw prizesError;
 
+    const map = { 4: 1, 5: 2, 6: 3 }; // маппим на привычные места для фронта
+
     const prizes = (rawPrizes || []).map(p => ({
-      place: p.spender_place,
+      place: map[p.spender_place] ?? 3,
       nft_name: p.nft_name ?? null,
       slug: p.slug ?? null,
     }));
