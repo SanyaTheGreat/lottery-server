@@ -8,7 +8,8 @@ import {
   createSell,
   getTicketPurchases,
   withdrawReferral,
-   getLeaderboard
+  getLeaderboard,
+  getLeaderboardReferrals 
 } from '../controllers/users/index.js';
 // import { getAllUsers } from '../controllers/usersController.js'; // опционально
 
@@ -23,6 +24,7 @@ router.get('/profile/:telegram_id', getProfile);
 router.get('/referrals/:telegram_id', getReferrals);
 router.post('/withdraw', withdrawReferral);
 router.get('/leaderboard', getLeaderboard);
+router.get('/users/leaderboard-referrals', getLeaderboardReferrals);
 
 
 
