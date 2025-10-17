@@ -133,17 +133,18 @@ export default async function telegramWebhook(req, res) {
         .eq("telegram_id", telegram_id)
         .maybeSingle();
 
+      const delta = tickets_tenths / 10; // начисление (например 0.1 TON)
+
       if (user) {
-        const curr_tenths = floorToTenthsInt(user.tickets || 0); // нормализуем существующее значение
-        const new_tenths  = curr_tenths + tickets_tenths;
+        const new_balance = Number(((user.tickets || 0) + delta).toFixed(2));
         await supabase
-          .from("users")
-          .update({ tickets: new_tenths / 10 })
-          .eq("id", user.id);
+        .from("users")
+        .update({ tickets: new_balance })
+        .eq("id", user.id);
       } else {
         await supabase
           .from("users")
-          .insert({ telegram_id, tickets: tickets_credit });
+          .insert({ telegram_id, tickets: Number(delta.toFixed(2)) });
       }
 
       // Уведомление пользователю

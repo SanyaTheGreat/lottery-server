@@ -378,7 +378,7 @@ export const rerollPrize = async (req, res) => {
 
 /**
  * POST /api/case/spin/:id/claim
- * (логика без изменений)
+ * Добавлено: списание claim_price=25⭐ для не-«звёздных» призов.
  */
 export const claimPrize = async (req, res) => {
   try {
@@ -397,9 +397,10 @@ export const claimPrize = async (req, res) => {
       return res.status(409).json({ error: "nothing to claim (lose)" });
     }
 
+    // 👉 Тянем claim_price
     const { data: chance, error: chErr } = await supabase
       .from("case_chance")
-      .select("id, nft_name, quantity")
+      .select("id, nft_name, quantity, claim_price")
       .eq("id", spin.chance_id)
       .single();
     if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
@@ -417,6 +418,7 @@ export const claimPrize = async (req, res) => {
       if (matchNum) starsPrize = Number(matchNum[1]);
     }
 
+    // ⭐ Призы-звёзды — без оплаты claim_price, как раньше
     if (starsPrize > 0) {
       const { data: user, error: userErr } = await supabase
         .from("users")
@@ -444,6 +446,37 @@ export const claimPrize = async (req, res) => {
       if (updErr1) return res.status(500).json({ error: updErr1.message });
 
       return res.json({ status: "reward_sent" });
+    }
+
+    // 💰 Если для этого приза задана цена клейма (например, 25⭐) — списываем перед выдачей
+    const claimPrice = Number(chance.claim_price || 0);
+    if (claimPrice === 25) {
+      const { data: claimUser, error: uErr } = await supabase
+        .from("users")
+        .select("id, stars")
+        .eq("id", spin.user_id)
+        .single();
+      if (uErr || !claimUser) return res.status(404).json({ error: "user not found" });
+
+      if (Number(claimUser.stars || 0) < claimPrice) {
+        return res.status(402).json({ error: "Недостаточно звёзд для вывода (нужно 25⭐)" });
+      }
+
+      const { error: debErr } = await supabase
+        .from("users")
+        .update({ stars: Number(claimUser.stars) - claimPrice })
+        .eq("id", claimUser.id);
+      if (debErr) return res.status(500).json({ error: debErr.message });
+
+      // опционально: аудит списаний
+      try {
+        await supabase.from("stars_ledger").insert([{
+          user_id: claimUser.id,
+          change: -claimPrice,
+          reason: "claim_fee",
+          spin_id: id
+        }]);
+      } catch { /* noop */ }
     }
 
     const { data: availableGifts, error: giftErr } = await supabase
