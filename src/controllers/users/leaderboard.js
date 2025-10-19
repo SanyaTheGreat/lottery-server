@@ -1,20 +1,15 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-/**
- * GET /users/leaderboard?telegram_id=...&limit=10&offset=0
- * Ответ:
- * {
- *   top3: [...],
- *   list: [...],
- *   me: { rank, username, avatar_url, total_spent } | null,
- *   total: number,
- *   prizes: [{ place: 1|2|3, nft_name: string|null, slug: string|null }],
- *   end_at: string | null  // ISO, например "2025-10-15T00:00:00.000Z"
- * }
- */
-const getLeaderboard = async (req, res) => {
+export const getLeaderboard = async (req, res) => {
   try {
-    const { telegram_id, limit = 10, offset = 0 } = req.query;
+    // 🔐 "me" определяется только по токену, а не по query
+    const myTelegramId = req.user?.telegram_id || null;
+
+    // пагинация с безопасными пределами
+    const limitNum = Math.min(Math.max(parseInt(req.query.limit ?? '10', 10), 1), 100);
+    const offsetNum = Math.max(parseInt(req.query.offset ?? '0', 10), 0);
+    const from = offsetNum;
+    const to = from + limitNum - 1;
 
     // --- TOP-3 ---
     const { data: top3, error: top3Error } = await supabase
@@ -25,8 +20,6 @@ const getLeaderboard = async (req, res) => {
     if (top3Error) throw top3Error;
 
     // --- Список (пагинация) ---
-    const from = Number(offset);
-    const to = from + Number(limit) - 1;
     const { data: list, error: listError } = await supabase
       .from('v_top_spenders')
       .select('*')
@@ -34,25 +27,25 @@ const getLeaderboard = async (req, res) => {
       .range(from, to);
     if (listError) throw listError;
 
-    // --- Место текущего пользователя ---
+    // --- Место текущего пользователя (если есть токен) ---
     let me = null;
-    if (telegram_id) {
+    if (myTelegramId) {
       const { data: userRank, error: meError } = await supabase
         .from('v_top_spenders')
         .select('rank, username, avatar_url, total_spent')
-        .eq('telegram_id', telegram_id)
+        .eq('telegram_id', myTelegramId)
         .maybeSingle();
       if (meError) throw meError;
-      me = userRank;
+      me = userRank ?? null;
     }
 
-    // --- Общее количество (для пагинации) ---
+    // --- Общее количество ---
     const { count, error: countError } = await supabase
       .from('v_top_spenders')
       .select('rank', { count: 'exact', head: true });
     if (countError) throw countError;
 
-    // --- Призы для топ-3 (берём из gifts_for_cases.spender_place) ---
+    // --- Призы для топ-3 ---
     const { data: rawPrizes, error: prizesError } = await supabase
       .from('gifts_for_cases')
       .select('spender_place, nft_name, slug')
@@ -64,11 +57,11 @@ const getLeaderboard = async (req, res) => {
       .map(p => ({
         place: p.spender_place,
         nft_name: p.nft_name ?? null,
-        slug: p.slug ?? null, // можно использовать на фронте как имя файла анимации
+        slug: p.slug ?? null,
       }))
       .sort((a, b) => a.place - b.place);
 
-    // --- Дата окончания текущего сезона лидерборда ---
+    // --- Дата окончания сезона ---
     const { data: settings, error: settingsError } = await supabase
       .from('leaderboard_settings')
       .select('end_at')
@@ -77,18 +70,16 @@ const getLeaderboard = async (req, res) => {
       .maybeSingle();
     if (settingsError) throw settingsError;
 
-    res.status(200).json({
+    return res.status(200).json({
       top3,
       list,
-      me,
+      me,                       // null, если нет токена
       total: count ?? 0,
       prizes,
       end_at: settings?.end_at ?? null,
     });
   } catch (error) {
     console.error('❌ /users/leaderboard error:', error?.message || error);
-    res.status(500).json({ error: error?.message || 'Server error' });
+    return res.status(500).json({ error: error?.message || 'Server error' });
   }
 };
-
-export default getLeaderboard;

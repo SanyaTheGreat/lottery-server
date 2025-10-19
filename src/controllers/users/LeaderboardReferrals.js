@@ -1,10 +1,15 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-const getLeaderboardReferrals = async (req, res) => {
+export const getLeaderboardReferrals = async (req, res) => {
   try {
-    const { telegram_id, limit = 10, offset = 0 } = req.query;
-    const from = Number(offset);
-    const to = from + Number(limit) - 1;
+    // 🔐 свой рейтинг показываем только по JWT
+    const myTelegramId = req.user?.telegram_id || null;
+
+    // безопасная пагинация
+    const limitNum = Math.min(Math.max(parseInt(req.query.limit ?? '10', 10), 1), 100);
+    const offsetNum = Math.max(parseInt(req.query.offset ?? '0', 10), 0);
+    const from = offsetNum;
+    const to = from + limitNum - 1;
 
     // --- TOP-3 ---
     const { data: top3, error: top3Error } = await supabase
@@ -22,19 +27,19 @@ const getLeaderboardReferrals = async (req, res) => {
       .range(from, to);
     if (listError) throw listError;
 
-    // --- Моё место ---
+    // --- Моё место (только при токене) ---
     let me = null;
-    if (telegram_id) {
+    if (myTelegramId) {
       const { data: meRow, error: meError } = await supabase
         .from('v_top_referrers_period')
         .select('rank, username, avatar_url, ref_count')
-        .eq('telegram_id', telegram_id)
+        .eq('telegram_id', myTelegramId)
         .maybeSingle();
       if (meError) throw meError;
       me = meRow ? { ...meRow, total_spent: meRow.ref_count } : null;
     }
 
-    // --- Призы для топ-3 по рефералам (новая колонка) ---
+    // --- Призы для топ-3 по рефералам ---
     const { data: rawPrizes, error: prizesError } = await supabase
       .from('gifts_for_cases')
       .select('spender_place_ref, nft_name, slug')
@@ -48,7 +53,7 @@ const getLeaderboardReferrals = async (req, res) => {
       slug: p.slug ?? null,
     }));
 
-    // --- Дата окончания сезона
+    // --- Дата окончания сезона ---
     const { data: settings, error: settingsError } = await supabase
       .from('leaderboard_settings')
       .select('end_at')
@@ -57,28 +62,20 @@ const getLeaderboardReferrals = async (req, res) => {
       .maybeSingle();
     if (settingsError) throw settingsError;
 
-    // --- форматируем ответ под фронт
-    const listFormatted = (list || []).map(row => ({
-      ...row,
-      total_spent: row.ref_count,
-    }));
-    const top3Formatted = (top3 || []).map(row => ({
-      ...row,
-      total_spent: row.ref_count,
-    }));
+    // --- Форматирование ответа под фронт
+    const listFormatted = (list || []).map(row => ({ ...row, total_spent: row.ref_count }));
+    const top3Formatted = (top3 || []).map(row => ({ ...row, total_spent: row.ref_count }));
 
-    res.status(200).json({
+    return res.status(200).json({
       top3: top3Formatted,
       list: listFormatted,
-      me,
+      me,                             // null, если нет JWT
       total: count ?? listFormatted.length ?? 0,
       prizes,
       end_at: settings?.end_at ?? null,
     });
   } catch (error) {
     console.error('❌ /users/leaderboard-referrals error:', error?.message || error);
-    res.status(500).json({ error: error?.message || 'Server error' });
+    return res.status(500).json({ error: error?.message || 'Server error' });
   }
 };
-
-export default getLeaderboardReferrals;

@@ -1,102 +1,121 @@
 import { supabase } from '../../services/supabaseClient.js';
 import { beginCell } from '@ton/ton';
 
-// Функция для преобразования base64 в base64url без паддинга
+// base64 -> base64url (без паддинга)
 function toBase64Url(base64) {
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// TON payload из telegram_id
+function makeTonPayloadFromTgId(telegram_id) {
+  const cell = beginCell().storeUint(0, 32).storeStringTail(String(telegram_id)).endCell();
+  return toBase64Url(cell.toBoc().toString('base64'));
+}
+
+/**
+ * Безопасный апсерт пользователя.
+ * Требует JWT-мидлвару (req.user).
+ * Опционально поддерживает реферала через ?ref=<telegram_id> (только при первом создании).
+ */
 const addUser = async (req, res) => {
-  console.log('📥 [backend] Получен запрос на /users/register');
+  try {
+    // 🔐 пользователь только из JWT
+    const tgId = req.user?.telegram_id;
+    const usernameFromToken = req.user?.username || '';
+    const avatarUrlFromToken = req.user?.photo_url || null;
 
-  const { telegram_id, username, wallet, referrer_id, avatar_url } = req.body;
-
-  if (!telegram_id || !username) {
-    return res.status(400).json({ error: 'Username and Telegram ID are required' });
-  }
-
-  // Проверяем, есть ли уже пользователь
-  const { data: existingUser, error: checkError } = await supabase
-    .from('users')
-    .select('id')
-    .eq('telegram_id', telegram_id)
-    .limit(1)
-    .maybeSingle();
-
-  if (checkError) {
-    console.error('❌ Database check failed:', checkError.message);
-    return res.status(500).json({ error: 'Database check failed' });
-  }
-
-  let referred_by = null;
-
-  if (referrer_id && referrer_id !== telegram_id) {
-    const { data: referrer } = await supabase
-      .from('users')
-      .select('id')
-      .eq('telegram_id', referrer_id)
-      .limit(1)
-      .maybeSingle();
-
-    if (referrer) referred_by = referrer.id;
-  }
-
-  // Генерация payload в формате base64url без паддинга
-  const cell = beginCell()
-    .storeUint(0, 32)
-    .storeStringTail(`${telegram_id}`)
-    .endCell();
-
-  const base64 = cell.toBoc().toString('base64');
-  const payload = toBase64Url(base64);
-
-  const newUserData = {
-    telegram_id,
-    username,
-    wallet: wallet || null,
-    tickets: 0,
-    payload,
-    avatar_url: avatar_url || null,
-    ...(referred_by && { referred_by }),
-  };
-
-  // ✅ Если пользователь уже существует → обновляем username и avatar_url
-  if (existingUser) {
-    const { data: updated, error: updateError } = await supabase
-      .from('users')
-      .update({
-        username,
-        avatar_url: avatar_url || null,
-      })
-      .eq('telegram_id', telegram_id)
-      .select();
-
-    if (updateError) {
-      console.error('❌ Ошибка обновления:', updateError.message);
-      return res.status(500).json({ error: updateError.message });
+    if (!tgId) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    return res.status(200).json({
-      message: 'User already existed — username updated',
-      user: updated?.[0] || null,
+    // Ищем пользователя
+    const { data: existingUser, error: checkError } = await supabase
+      .from('users')
+      .select('id, username, avatar_url, referred_by, payload')
+      .eq('telegram_id', tgId)
+      .maybeSingle();
+
+    if (checkError) {
+      console.error('❌ Database check failed:', checkError.message);
+      return res.status(500).json({ error: 'Database check failed' });
+    }
+
+    // Если юзер уже есть — мягкое обновление username/avatar
+    if (existingUser) {
+      const patch = {};
+      if (usernameFromToken && usernameFromToken !== existingUser.username) patch.username = usernameFromToken;
+      if (avatarUrlFromToken && avatarUrlFromToken !== existingUser.avatar_url) patch.avatar_url = avatarUrlFromToken;
+
+      if (Object.keys(patch).length) {
+        const { data: updated, error: updateError } = await supabase
+          .from('users')
+          .update(patch)
+          .eq('telegram_id', tgId)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.error('❌ Update user failed:', updateError.message);
+          return res.status(500).json({ error: 'Update failed' });
+        }
+
+        return res.status(200).json({
+          message: 'User already existed — profile updated',
+          user: updated,
+        });
+      }
+
+      // ничего не изменилось
+      return res.status(200).json({
+        message: 'User already existed — no changes',
+        user: existingUser,
+      });
+    }
+
+    // 🧩 Новый пользователь — генерим payload
+    const payload = makeTonPayloadFromTgId(tgId);
+
+    // Реферал — однократно, если ?ref валиден и не равен tgId
+    let referred_by = null;
+    const ref = req.query?.ref;
+    if (ref && String(ref) !== String(tgId)) {
+      const { data: referrer } = await supabase
+        .from('users')
+        .select('id')
+        .eq('telegram_id', ref)
+        .maybeSingle();
+      if (referrer) referred_by = referrer.id;
+    }
+
+    const newUserData = {
+      telegram_id: tgId,
+      username: usernameFromToken || '',
+      wallet: null,
+      tickets: 0,
+      payload,
+      avatar_url: avatarUrlFromToken || null,
+      ...(referred_by && { referred_by }),
+    };
+
+    const { data, error } = await supabase
+      .from('users')
+      .insert([newUserData])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('❌ Insert user failed:', error.message);
+      return res.status(500).json({ error: 'Insert failed' });
+    }
+
+    return res.status(201).json({
+      message: 'User registered successfully',
+      user: data,
     });
+  } catch (err) {
+    console.error('❌ addUser unexpected error:', err?.message || err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
-
-  // 🚀 Если нет — создаём нового
-  const { data, error } = await supabase
-    .from('users')
-    .insert([newUserData])
-    .select();
-
-  if (error) {
-    console.error('❌ Ошибка вставки в Supabase:', error.message);
-    return res.status(500).json({ error: error.message });
-  }
-
-  res.status(201).json({
-    message: 'User registered successfully',
-    user: data?.[0] || null,
-  });
 };
 
 export default addUser;
