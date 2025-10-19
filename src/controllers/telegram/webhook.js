@@ -3,6 +3,7 @@ import { supabase } from "../../services/supabaseClient.js";
 
 const BOT_TOKEN  = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app";
+const GEM_KEY    = process.env.GEM_KEY; // 🔐 секрет для Telegram webhook
 
 // ----- helpers ----------------------------------------------------
 
@@ -28,7 +29,6 @@ async function answerPreCheckoutQuery(id, ok = true, error_message) {
 
 // округление ВНИЗ к 0.1, но безопасно через целые десятые
 function floorToTenthsInt(value) {
-  // добавляем крошечный эпсилон, умножаем на 10 и берём floor → целые "десятые"
   return Math.floor((Number(value) + 1e-9) * 10);
 }
 
@@ -50,9 +50,18 @@ async function getFx() {
 
 export default async function telegramWebhook(req, res) {
   try {
+    // ✅ Проверка Telegram secret (GEM_KEY)
+    if (GEM_KEY) {
+      const headerSecret = req.headers["x-telegram-bot-api-secret-token"];
+      if (!headerSecret || headerSecret !== GEM_KEY) {
+        console.warn("🚫 Invalid or missing Telegram secret token");
+        return res.sendStatus(401);
+      }
+    }
+
     const upd = req.body;
 
-    // 1) Подтверждаем платеж перед чекаутом
+    // 1️⃣ Подтверждение перед оплатой (pre_checkout_query)
     if (upd?.pre_checkout_query) {
       await answerPreCheckoutQuery(upd.pre_checkout_query.id, true);
       return res.sendStatus(200);
@@ -60,7 +69,7 @@ export default async function telegramWebhook(req, res) {
 
     const msg = upd?.message || upd?.edited_message;
 
-    // 2) /start (кнопка запуска Mini App + поддержка реферала)
+    // 2️⃣ /start — кнопка открытия Mini App
     if (msg?.text?.startsWith("/start")) {
       const user = msg.from;
       const parts = msg.text.trim().split(/\s+/, 2);
@@ -87,14 +96,14 @@ export default async function telegramWebhook(req, res) {
       return res.sendStatus(200);
     }
 
-    // 3) Успешная оплата Stars → зачисляем tickets (1 TON = 1 ticket)
+    // 3️⃣ Успешная оплата Stars → начисляем билеты (1 TON = 1 ticket)
     const sp = msg?.successful_payment;
     if (sp) {
       const telegram_id = msg.from.id;
-      const stars_paid  = sp.total_amount; // integer
+      const stars_paid  = sp.total_amount;
       const tx_id = sp.telegram_payment_charge_id || sp.provider_payment_charge_id;
 
-      // идемпотентность
+      // идемпотентность: уже был этот tx_id?
       const { data: exists } = await supabase
         .from("sells")
         .select("id")
@@ -106,60 +115,52 @@ export default async function telegramWebhook(req, res) {
       const ton_per_star  = Number(ton_per_100stars) / 100;
       const netMultiplier = 1 - Number(fee_markup);
 
-      // "сырое" TON как число (для аудита/логов), но все расчёты для зачисления — в интеджерах десятых
       const tickets_raw = Number(stars_paid) * ton_per_star * netMultiplier;
+      const tickets_tenths = floorToTenthsInt(tickets_raw);
+      const tickets_credit = tickets_tenths / 10;
 
-      // целые "десятые": округляем ВНИЗ к шагу 0.1
-      const tickets_tenths = floorToTenthsInt(tickets_raw); // int
-      const tickets_credit = tickets_tenths / 10;           // decimal с 1 знаком после запятой, без дрожания
-
-      // Лог в sells
       await supabase.from("sells").insert({
         telegram_id,
         amount_stars: stars_paid,
-        // храните аудиторное значение как строку/decimal с нужной точностью, чтобы не потерять его:
         amount_ton: Number.isFinite(tickets_raw) ? Number(tickets_raw.toFixed(6)) : null,
-        amount: tickets_credit,        // что зачислено
+        amount: tickets_credit,
         rate_at: ton_per_100stars,
         tx_id,
         status: "paid",
         payload: JSON.stringify({ currency: sp.currency })
       });
 
-      // Зачисляем на баланс пользователя (users.tickets), копим через целые "десятые"
+      // начисляем пользователю
       const { data: user } = await supabase
         .from("users")
         .select("id, tickets")
         .eq("telegram_id", telegram_id)
         .maybeSingle();
 
-      const delta = tickets_tenths / 10; // начисление (например 0.1 TON)
+      const delta = tickets_tenths / 10;
 
       if (user) {
         const new_balance = Number(((user.tickets || 0) + delta).toFixed(2));
-        await supabase
-        .from("users")
-        .update({ tickets: new_balance })
-        .eq("id", user.id);
+        await supabase.from("users").update({ tickets: new_balance }).eq("id", user.id);
       } else {
-        await supabase
-          .from("users")
-          .insert({ telegram_id, tickets: Number(delta.toFixed(2)) });
+        await supabase.from("users").insert({
+          telegram_id,
+          tickets: Number(delta.toFixed(2))
+        });
       }
 
-      // Уведомление пользователю
       await sendMessage(
         msg.chat.id,
-        `Оплата получена ✅ Successful: ${tickets_credit.toFixed(1)} TON`
+        `Оплата получена ✅ Зачислено: ${tickets_credit.toFixed(1)} TON`
       );
 
       return res.sendStatus(200);
     }
 
-    // 4) Остальные апдейты игнорируем
+    // 4️⃣ Остальные апдейты пропускаем
     return res.sendStatus(200);
   } catch (err) {
-    console.error("Telegram webhook error:", err);
+    console.error("❌ Telegram webhook error:", err);
     return res.sendStatus(500);
   }
 }
