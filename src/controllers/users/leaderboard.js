@@ -1,6 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-export const getLeaderboard = async (req, res) => {
+const getLeaderboard = async (req, res) => {
   try {
     // 🔐 "me" определяется только по токену, а не по query
     const myTelegramId = req.user?.telegram_id || null;
@@ -73,7 +73,7 @@ export const getLeaderboard = async (req, res) => {
     return res.status(200).json({
       top3,
       list,
-      me,                       // null, если нет токена
+      me, // null, если нет токена
       total: count ?? 0,
       prizes,
       end_at: settings?.end_at ?? null,
@@ -83,3 +83,5 @@ export const getLeaderboard = async (req, res) => {
     return res.status(500).json({ error: error?.message || 'Server error' });
   }
 };
+
+export default getLeaderboard;

@@ -1,6 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-export const getLeaderboardReferrals = async (req, res) => {
+const getLeaderboardReferrals = async (req, res) => {
   try {
     // 🔐 свой рейтинг показываем только по JWT
     const myTelegramId = req.user?.telegram_id || null;
@@ -69,7 +69,7 @@ export const getLeaderboardReferrals = async (req, res) => {
     return res.status(200).json({
       top3: top3Formatted,
       list: listFormatted,
-      me,                             // null, если нет JWT
+      me, // null, если нет JWT
       total: count ?? listFormatted.length ?? 0,
       prizes,
       end_at: settings?.end_at ?? null,
@@ -79,3 +79,5 @@ export const getLeaderboardReferrals = async (req, res) => {
     return res.status(500).json({ error: error?.message || 'Server error' });
   }
 };
+
+export default getLeaderboardReferrals;
