@@ -1,6 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-export const getTicketPurchases = async (req, res) => {
+const getTicketPurchases = async (req, res) => {
   try {
     // 🛡️ Достаём telegram_id из токена
     const telegram_id = req.user?.telegram_id;
@@ -27,3 +27,5 @@ export const getTicketPurchases = async (req, res) => {
     return res.status(500).json({ error: 'Unexpected server error' });
   }
 };
+
+export default getTicketPurchases;

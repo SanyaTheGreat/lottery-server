@@ -1,6 +1,6 @@
 import { supabase } from '../../services/supabaseClient.js';
 
-export const getReferrals = async (req, res) => {
+const getReferrals = async (req, res) => {
   try {
     // 🛡️ Пользователь из JWT
     const telegram_id = req.user?.telegram_id;
@@ -8,7 +8,7 @@ export const getReferrals = async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // 1) Находим текущего пользователя по tg-id
+    // 1️⃣ Находим текущего пользователя по tg-id
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('id, referral_earnings')
@@ -19,18 +19,18 @@ export const getReferrals = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // 2) Считаем рефералов (всем, у кого referred_by = мой id)
-    const { data: referrals, error } = await supabase
+    // 2️⃣ Считаем рефералов (всем, у кого referred_by = мой id)
+    const { count, error: countError } = await supabase
       .from('users')
-      .select('id', { count: 'exact', head: true })
+      .select('*', { count: 'exact', head: true })
       .eq('referred_by', user.id);
 
-    if (error) {
-      console.error('❌ Error fetching referrals:', error);
+    if (countError) {
+      console.error('❌ Error fetching referrals:', countError);
       return res.status(500).json({ error: 'Failed to fetch referrals' });
     }
 
-    const referral_count = referrals?.length ?? 0; // при head:true data может быть []
+    const referral_count = count ?? 0;
     const referral_earnings = parseFloat(user.referral_earnings || 0);
 
     return res.status(200).json({ referral_count, referral_earnings });
@@ -39,3 +39,5 @@ export const getReferrals = async (req, res) => {
     return res.status(500).json({ error: 'Unexpected server error' });
   }
 };
+
+export default getReferrals;
