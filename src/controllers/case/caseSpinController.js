@@ -2,18 +2,31 @@ import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
 /**
- * POST /api/case/spin
- * body: { case_id: uuid, telegram_id: number, pay_with: 'tickets'|'stars'|'free', idempotency_key?: uuid }
+ * POST /api/case/spin    🔐 JWT
+ * body: { case_id: uuid, pay_with: 'tickets'|'stars'|'free', idempotency_key?: uuid }
+ * telegram_id берём из req.user (миддлвара requireJwt)
  */
 export const spinCase = async (req, res) => {
   try {
-    const { case_id, telegram_id, pay_with = "tickets", idempotency_key } = req.body;
-    if (!case_id || !telegram_id) {
-      return res.status(400).json({ error: "case_id и telegram_id обязательны" });
-    }
-    // ✅ добавили поддержку 'free'
+    const telegram_id = req.user?.telegram_id;           // ← из JWT
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
+    const { case_id, pay_with = "tickets", idempotency_key } = req.body || {};
+    if (!case_id) return res.status(400).json({ error: "case_id обязателен" });
     if (!["tickets", "stars", "free"].includes(pay_with)) {
       return res.status(400).json({ error: "pay_with должен быть 'tickets' | 'stars' | 'free'" });
+    }
+
+    // ❗ Идемпотентность по ключу (если пришёл)
+    if (idempotency_key) {
+      const { data: existing } = await supabase
+        .from("case_spins")
+        .select("id, status")
+        .eq("idempotency_key", idempotency_key)
+        .maybeSingle();
+      if (existing) {
+        return res.json({ spin_id: existing.id, status: existing.status });
+      }
     }
 
     // кейс
@@ -29,7 +42,7 @@ export const spinCase = async (req, res) => {
       return res.status(403).json({ error: "Оплата звёздами запрещена для этого кейса" });
     }
 
-    // пользователь (+ referred_by для рефералок)  ✅ добавили free_spin_last_at
+    // пользователь (+ referred_by для рефералок, + free_spin_last_at)
     const { data: user, error: userErr } = await supabase
       .from("users")
       .select("id, telegram_id, tickets, stars, referred_by, free_spin_last_at")
@@ -37,7 +50,7 @@ export const spinCase = async (req, res) => {
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
-    // Если бесплатный спин — он доступен ТОЛЬКО для самого дешёвого активного кейса
+    // Бесплатный спин — только для самого дешёвого активного кейса
     let cheapestCaseId = null;
     if (pay_with === "free") {
       const { data: cheap, error: cheapErr } = await supabase
@@ -58,7 +71,7 @@ export const spinCase = async (req, res) => {
 
     // оплата
     let pay_with_tickets = null; // логируем TON-эквивалент для tickets/stars
-    let pay_with_ton = null;     // прямой TON-платёж (на будущее)
+    let pay_with_ton = null;     // резерв
     if (pay_with === "tickets") {
       const price = Number(caseRow.price);
       if ((user.tickets || 0) < price) {
@@ -70,8 +83,8 @@ export const spinCase = async (req, res) => {
         .eq("id", user.id);
       if (updErr) return res.status(500).json({ error: updErr.message });
       pay_with_tickets = price;
+
     } else if (pay_with === "stars") {
-      // курс (stars за 1 TON)
       const { data: rateRow, error: rateErr } = await supabase
         .from("fx_rates")
         .select("stars_per_ton")
@@ -86,15 +99,15 @@ export const spinCase = async (req, res) => {
       if ((user.stars || 0) < priceStars) {
         return res.status(402).json({ error: `Недостаточно звёзд (нужно ${priceStars})` });
       }
-      // списываем звёзды — триггер БД пересчитает tickets автоматически
       const { error: updErr } = await supabase
         .from("users")
         .update({ stars: Number(user.stars || 0) - priceStars })
         .eq("id", user.id);
       if (updErr) return res.status(500).json({ error: updErr.message });
-      pay_with_tickets = priceTon; // лог: эквивалент в TON
+      pay_with_tickets = priceTon;
+
     } else if (pay_with === "free") {
-      // ✅ Бесплатный спин: проверяем 1-е пополнение и кулдаун 24ч. Ничего не списываем.
+      // Бесплатный спин: первое пополнение + кулдаун 24ч
       const { data: dep, error: derr } = await supabase
         .from("sells")
         .select("telegram_id, amount, amount_ton")
@@ -110,29 +123,25 @@ export const spinCase = async (req, res) => {
       if (!canFree) {
         return res.status(429).json({ error: "Слишком рано для бесплатного спина" });
       }
-      // Ничего не списываем.
+      // списаний нет
     }
 
-    // === Реферальные отчисления 10% от цены кейса (TON) ===
+    // Реферальные отчисления 5% от цены кейса (TON)
     try {
       const referrerId = user.referred_by || null;
       const refAmountTon = Number(caseRow.price || 0) * 0.05;
       if (referrerId && refAmountTon > 0) {
-        // журнал
         await supabase.from("referral_earnings").insert([{
           referrer_id: referrerId,
           referred_id: user.id,
           wheel_id: null,
           amount: refAmountTon
         }]);
-
-        // инкремент users.referral_earnings
         const { data: refUser } = await supabase
           .from("users")
           .select("referral_earnings")
           .eq("id", referrerId)
           .single();
-
         const current = Number(refUser?.referral_earnings || 0);
         await supabase
           .from("users")
@@ -142,9 +151,8 @@ export const spinCase = async (req, res) => {
     } catch (e) {
       console.warn("[referral] skipped:", e?.message || e);
     }
-    // === /рефералки ===
 
-    // активные шансы с запасом
+    // активные шансы
     const { data: chances, error: chErr } = await supabase
       .from("case_chance")
       .select("id, nft_name, weight, percent, price, payout_value, quantity, is_active")
@@ -153,7 +161,7 @@ export const spinCase = async (req, res) => {
       .gt("quantity", 0);
     if (chErr) return res.status(500).json({ error: chErr.message });
 
-    // если ничего доступного — фиксируем проигрыш
+    // если ничего нет — фиксируем проигрыш
     if (!chances || chances.length === 0) {
       const spinId = uuidv4();
       const idem = idempotency_key || uuidv4();
@@ -169,8 +177,7 @@ export const spinCase = async (req, res) => {
           weights_sum: 0,
           pay_with_tickets,
           pay_with_ton,
-          // ✅ сохраняем как есть, чтобы 'free' тоже попал
-          pay_with: pay_with,
+          pay_with,
           reroll_amount: null,
           idempotency_key: idem
         }])
@@ -178,18 +185,16 @@ export const spinCase = async (req, res) => {
         .single();
       if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
 
-      // ✅ отметим использование бесплатного спина
       if (pay_with === "free") {
         await supabase
           .from("users")
           .update({ free_spin_last_at: new Date().toISOString(), free_spin_last_notified_at: null })
           .eq("id", user.id);
       }
-
       return res.json({ spin_id: spinLose.id, status: "lose" });
     }
 
-    // RNG выбор
+    // RNG
     const weightsSum = chances.reduce((s, c) => s + Number(c.weight), 0);
     const roll = Math.random() * weightsSum;
     let pick = null;
@@ -200,7 +205,7 @@ export const spinCase = async (req, res) => {
     }
     if (!pick) pick = chances[chances.length - 1];
 
-    // если выпал шанс "lose" — фиксируем проигрыш
+    // выпал lose → проигрыш
     if (pick.nft_name === "lose") {
       const spinId = uuidv4();
       const idem = idempotency_key || uuidv4();
@@ -216,21 +221,18 @@ export const spinCase = async (req, res) => {
           weights_sum: weightsSum,
           pay_with_tickets,
           pay_with_ton,
-          // ✅ сохраняем как есть
-          pay_with: pay_with,
+          pay_with,
           reroll_amount: null,
           idempotency_key: idem
         }]);
       if (spinLoseErr) return res.status(500).json({ error: spinLoseErr.message });
 
-      // ✅ отметим использование бесплатного спина
       if (pay_with === "free") {
         await supabase
           .from("users")
           .update({ free_spin_last_at: new Date().toISOString(), free_spin_last_notified_at: null })
           .eq("id", user.id);
       }
-
       return res.json({ spin_id: spinId, status: "lose" });
     }
 
@@ -249,8 +251,7 @@ export const spinCase = async (req, res) => {
         weights_sum: weightsSum,
         pay_with_tickets,
         pay_with_ton,
-        // ✅ сохраняем как есть
-        pay_with: pay_with,
+        pay_with,
         reroll_amount: null,
         idempotency_key: idem
       }])
@@ -258,7 +259,6 @@ export const spinCase = async (req, res) => {
       .single();
     if (spinWinErr) return res.status(500).json({ error: spinWinErr.message });
 
-    // ✅ отметим использование бесплатного спина
     if (pay_with === "free") {
       await supabase
         .from("users")
@@ -283,11 +283,14 @@ export const spinCase = async (req, res) => {
 };
 
 /**
- * POST /api/case/spin/:id/reroll
+ * POST /api/case/spin/:id/reroll   🔐 JWT
  * Продаём приз → начисляем в валюте исходной оплаты спина
  */
 export const rerollPrize = async (req, res) => {
   try {
+    const telegram_id = req.user?.telegram_id;
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
     const { id } = req.params;
 
     const { data: spin, error: spinErr } = await supabase
@@ -302,6 +305,17 @@ export const rerollPrize = async (req, res) => {
     if (!spin.chance_id) {
       return res.status(409).json({ error: "nothing to reroll (lose)" });
     }
+
+    // авторизованный пользователь должен совпадать с владельцем спина
+    const { data: owner } = await supabase
+      .from("users")
+      .select("telegram_id")
+      .eq("id", spin.user_id)
+      .single();
+    if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const payWith = spin.pay_with === "stars" ? "stars" : "tickets";
 
     const { data: chance, error: chErr } = await supabase
@@ -377,11 +391,14 @@ export const rerollPrize = async (req, res) => {
 };
 
 /**
- * POST /api/case/spin/:id/claim
+ * POST /api/case/spin/:id/claim   🔐 JWT
  * Добавлено: списание claim_price=25⭐ для не-«звёздных» призов.
  */
 export const claimPrize = async (req, res) => {
   try {
+    const telegram_id = req.user?.telegram_id;
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
     const { id } = req.params;
 
     const { data: spin, error: spinErr } = await supabase
@@ -395,6 +412,16 @@ export const claimPrize = async (req, res) => {
     }
     if (!spin.chance_id) {
       return res.status(409).json({ error: "nothing to claim (lose)" });
+    }
+
+    // авторизованный пользователь должен совпадать с владельцем спина
+    const { data: owner } = await supabase
+      .from("users")
+      .select("telegram_id")
+      .eq("id", spin.user_id)
+      .single();
+    if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
+      return res.status(403).json({ error: "Forbidden" });
     }
 
     // 👉 Тянем claim_price
@@ -418,7 +445,7 @@ export const claimPrize = async (req, res) => {
       if (matchNum) starsPrize = Number(matchNum[1]);
     }
 
-    // ⭐ Призы-звёзды — без оплаты claim_price, как раньше
+    // ⭐ Призы-звёзды — без оплаты claim_price
     if (starsPrize > 0) {
       const { data: user, error: userErr } = await supabase
         .from("users")
@@ -448,7 +475,7 @@ export const claimPrize = async (req, res) => {
       return res.json({ status: "reward_sent" });
     }
 
-    // 💰 Если для этого приза задана цена клейма (например, 25⭐) — списываем перед выдачей
+    // 💰 Если задана цена клейма (например, 25⭐) — списываем перед выдачей
     const claimPrice = Number(chance.claim_price || 0);
     if (claimPrice === 25) {
       const { data: claimUser, error: uErr } = await supabase
@@ -468,7 +495,6 @@ export const claimPrize = async (req, res) => {
         .eq("id", claimUser.id);
       if (debErr) return res.status(500).json({ error: debErr.message });
 
-      // опционально: аудит списаний
       try {
         await supabase.from("stars_ledger").insert([{
           user_id: claimUser.id,
@@ -476,9 +502,10 @@ export const claimPrize = async (req, res) => {
           reason: "claim_fee",
           spin_id: id
         }]);
-      } catch { /* noop */ }
+      } catch { /* audit best-effort */ }
     }
 
+    // берём подготовленный подарочный код/ссылку
     const { data: availableGifts, error: giftErr } = await supabase
       .from("gifts_for_cases")
       .select("pending_id, nft_number, msg_id, nft_name, transfer_stars, link, is_infinite, used")

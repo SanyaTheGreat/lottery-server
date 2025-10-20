@@ -1,10 +1,16 @@
 import { supabase } from "../../services/supabaseClient.js";
 
-// POST /api/cases
+/**
+ * POST /api/cases   🔐 JWT
+ * Создать кейс. Сейчас просто требуем авторизованного пользователя.
+ * (Если есть роль админа — добавь проверку внутри по req.user.telegram_id.)
+ */
 export const createCase = async (req, res) => {
   try {
-    const { name, price, is_active = true, allow_stars = true } = req.body;
+    const telegram_id = req.user?.telegram_id; // ← приходит из requireJwt()
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
 
+    const { name, price, is_active = true, allow_stars = true } = req.body || {};
     if (!name || price === undefined) {
       return res.status(400).json({ error: "name и price обязательны" });
     }
@@ -16,16 +22,19 @@ export const createCase = async (req, res) => {
       .single();
 
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data);
+    return res.status(201).json(data);
   } catch (e) {
     return res.status(500).json({ error: "createCase failed" });
   }
 };
 
-// GET /api/cases
+/**
+ * GET /api/cases   (публично)
+ * Возвращает список кейсов + вычисляемое поле price_in_stars
+ */
 export const getCases = async (_req, res) => {
   try {
-    // Получаем курс stars_per_ton из fx_rates
+    // курс для пересчёта TON → Stars
     const { data: rateRow, error: rateErr } = await supabase
       .from("fx_rates")
       .select("stars_per_ton")
@@ -38,7 +47,6 @@ export const getCases = async (_req, res) => {
 
     const starsPerTon = Number(rateRow.stars_per_ton);
 
-    // Загружаем кейсы
     const { data, error } = await supabase
       .from("cases")
       .select("id, name, price, is_active, allow_stars")
@@ -46,7 +54,6 @@ export const getCases = async (_req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Добавляем вычисляемое поле price_in_stars
     const casesWithStars = (data || []).map((c) => ({
       ...c,
       price_in_stars: Math.ceil(Number(c.price) * starsPerTon),

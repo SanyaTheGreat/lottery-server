@@ -1,28 +1,26 @@
 import { supabase } from "../../services/supabaseClient.js";
 
 /**
- * GET /api/inventory?telegram_id=... | ?user_id=...
- * Возвращает pending-призы из VIEW inventory_pending.
+ * GET /api/inventory  (🔐 JWT)
+ * Возвращает pending-призы текущего пользователя из VIEW inventory_pending.
+ * telegram_id берём из req.user (мидлварь requireJwt()).
  */
 export const getInventory = async (req, res) => {
   try {
-    const telegram_id = req.query.telegram_id ? String(req.query.telegram_id) : null;
-    const user_id     = req.query.user_id ? String(req.query.user_id) : null;
-
-    if (!telegram_id && !user_id) {
-      return res.status(400).json({ error: "telegram_id or user_id is required" });
+    const telegram_id = req.user?.telegram_id;
+    if (!telegram_id) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
-    let query = supabase
+    const { data, error } = await supabase
       .from("inventory_pending")
       .select("*")
+      .eq("telegram_id", String(telegram_id))
       .order("created_at", { ascending: false });
 
-    if (telegram_id) query = query.eq("telegram_id", telegram_id);
-    if (!telegram_id && user_id) query = query.eq("user_id", user_id);
-
-    const { data, error } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
 
     return res.json({ items: data || [] });
   } catch (e) {
