@@ -8,6 +8,7 @@ import { verifyTelegramWebApp } from './utils/verifyTelegramWebApp.js';
 import { requireJwt } from './middleware/requireJwt.js';
 import { supabase } from './services/supabaseClient.js';
 
+// --- роуты ---
 import usersRouter from './routes/users.js';
 import wheelRoutes from './routes/wheel.js';
 import giftsRoutes from './routes/gifts.js';
@@ -16,9 +17,11 @@ import casesRoutes from "./routes/casesRoutes.js";
 import caseChanceRoutes from "./routes/caseChanceRoutes.js";
 import caseSpinRoutes from "./routes/caseSpinRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
+import slotsRoutes from "./routes/slots.js";           // ✅ новые
+import slotAdminRoutes from "./routes/slotAdmin.js";   // ✅ новые
 
 // --- фоновые задачи ---
-import './checkTonTransactions.js';   // сканер TON
+import './checkTonTransactions.js';
 import './scheduler/autoDraw.js';
 import './scheduler/notifier.js';
 import './scheduler/msg-notifier.js';
@@ -32,33 +35,33 @@ console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL);
 const app = express();
 const port = 3000;
 
+// --- базовая настройка CORS ---
 app.use(cors({
   origin: [
     'https://frontend-nine-sigma-49.vercel.app',
     'https://t.me'
   ],
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'], // ✅ добавлено Authorization
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-gem-key'], // ✅ добавлено GEM_KEY
   credentials: true,
 }));
 
-// важно для приёма JSON от Telegram
 app.use(express.json());
 
 // --- публичные эндпоинты ---
 
-// Telegram webhook (оставляем публичным)
+// Telegram webhook (публичный)
 app.post('/tg/webhook', telegramWebhook);
 
+// Авторизация через Telegram WebApp
 app.post('/auth/telegram', async (req, res) => {
   try {
     const { initData } = req.body || {};
     const v = verifyTelegramWebApp(initData, process.env.BOT_TOKEN, 86400);
     if (!v.ok) return res.status(403).json({ ok: false, error: v.reason });
 
-    const u = v.user; // объект из Telegram initData
+    const u = v.user;
 
-    // 🧩 берём только нужное
     const payload = {
       telegram_id: Number(u.id),
       username: u.username ?? null,
@@ -66,7 +69,6 @@ app.post('/auth/telegram', async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
-    // 🔹 апсерт (создаёт или обновляет по telegram_id)
     const { data, error } = await supabase
       .from('users')
       .upsert(payload, { onConflict: 'telegram_id' })
@@ -78,7 +80,6 @@ app.post('/auth/telegram', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'Insert/update failed' });
     }
 
-    // 🔐 создаём JWT (24 часа)
     const token = jwt.sign(
       { telegram_id: payload.telegram_id, username: payload.username },
       process.env.JWT_SECRET,
@@ -93,9 +94,8 @@ app.post('/auth/telegram', async (req, res) => {
   }
 });
 
-
 // --- приватная зона (требует JWT) ---
-app.use(['/wheel', '/payments', '/api', '/inventory', '/users', '/gifts'], requireJwt());
+app.use(['/wheel', '/payments', '/inventory', '/users', '/gifts'], requireJwt());
 
 // --- Роуты API ---
 app.use('/users', usersRouter);
@@ -107,7 +107,11 @@ app.use("/api", caseChanceRoutes);
 app.use("/api", caseSpinRoutes);
 app.use("/api", inventoryRoutes);
 
-// --- тестовый корневой эндпоинт ---
+// ✅ новые роуты слотов
+app.use("/api", slotsRoutes);
+app.use("/api", slotAdminRoutes);
+
+// --- тестовый эндпоинт ---
 app.get('/', async (req, res) => {
   const { data, error } = await supabase.from('users').select('*').limit(5);
   if (error) return res.status(500).json({ error: error.message });
@@ -118,7 +122,7 @@ app.listen(port, () => {
   console.log(`🚀 Server running at http://localhost:${port}`);
 });
 
-// 👉 Временная отладка Supabase запроса
+// 👉 Временная отладка Supabase
 fetch("https://djpcftyqkwucbksknsdu.supabase.co/rest/v1/users", {
   method: "GET",
   headers: {
@@ -127,9 +131,5 @@ fetch("https://djpcftyqkwucbksknsdu.supabase.co/rest/v1/users", {
   }
 })
   .then(res => res.json())
-  .then(data => {
-    console.log("✅ Raw fetch success:", data);
-  })
-  .catch(err => {
-    console.error("❌ Raw fetch error:", err);
-  });
+  .then(data => console.log("✅ Raw fetch success:", data))
+  .catch(err => console.error("❌ Raw fetch error:", err));
