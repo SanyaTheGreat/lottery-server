@@ -3,9 +3,16 @@ import express from "express";
 import { requireJwt } from "../middleware/requireJwt.js";
 
 import {
-  spinSlot, getActiveSlots, getOutcomes, getSlotsHistory,
-  getInventory, claimInventory
+  spinSlot,
+  getActiveSlots,
+  getOutcomes,
+  getSlotsHistory,
 } from "../controllers/slot/slots.js";
+
+import {
+  getInventory,
+  claimInventory,
+} from "../controllers/slot/inventory.js";
 
 const r = express.Router();
 
