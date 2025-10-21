@@ -1,4 +1,4 @@
-// src/controllers/slots.js
+// src/controllers/slot/slots.js
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -42,10 +42,10 @@ export const spinSlot = async (req, res) => {
       }
     }
 
-    // slot
+    // slot (+ stars_prize)
     const { data: slot, error: slotErr } = await supabase
       .from("slots")
-      .select("id, active, price, gift_count, is_infinite, nft_name")
+      .select("id, active, price, gift_count, is_infinite, nft_name, stars_prize")
       .eq("id", slot_id)
       .single();
     if (slotErr || !slot) return res.status(404).json({ error: "Слот не найден" });
@@ -63,7 +63,9 @@ export const spinSlot = async (req, res) => {
 
     const price = Number(slot.price || 0);
     const balance_before = Number(user.stars || 0);
-    if (balance_before < price) return res.status(402).json({ error: `Не хватает ⭐ (нужно ${price})` });
+    if (balance_before < price) {
+      return res.status(402).json({ error: `Не хватает ⭐ (нужно ${price})` });
+    }
 
     // списание
     {
@@ -72,19 +74,9 @@ export const spinSlot = async (req, res) => {
         .update({ stars: balance_before - price })
         .eq("id", user.id);
       if (debErr) return res.status(500).json({ error: debErr.message });
-
-      // лог списания
-      try {
-        await supabase.from("stars_ledger").insert([{
-          user_id: user.id,
-          change: -price,
-          reason: "slot_spin",
-          meta: { slot_id: slot.id }
-        }]);
-      } catch {}
     }
 
-    // 💰 реферальный бонус 5% (TON экв.)
+    // рефералка 5% от TON-эквивалента цены
     try {
       const referrerId = user.referred_by || null;
       if (referrerId) {
@@ -120,16 +112,16 @@ export const spinSlot = async (req, res) => {
           }
         }
       }
-    } catch { /* не критично */ }
+    } catch { /* не критично для спина */ }
 
     // RNG 1..64
     const value = 1 + Math.floor(Math.random() * 64);
 
-    // outcomes (общая)
+    // outcomes (общая) — prize_amount больше не используем
     const { data: outcome, error: outErr } = await supabase
       .from("slot_outcomes")
       .select(
-        "value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type, prize_amount"
+        "value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type"
       )
       .eq("value", value)
       .single();
@@ -138,29 +130,20 @@ export const spinSlot = async (req, res) => {
 
     let status = "lose";
     let prize_type = outcome.prize_type || null;
-    let prize_amount = outcome.prize_amount || null;
+    const computedPrize = prize_type === "stars" ? Number(slot.stars_prize || 0) : 0;
+
     let inventory_id = null;
     let balance_after = balance_before - price;
 
-    if (prize_type === "stars" && Number(prize_amount) > 0) {
-      const add = Number(prize_amount);
+    if (prize_type === "stars" && computedPrize > 0) {
+      const add = computedPrize;
       const { error: addErr } = await supabase
         .from("users")
         .update({ stars: balance_after + add })
         .eq("id", user.id);
       if (addErr) return res.status(500).json({ error: addErr.message });
 
-      // логируем выигрыш
-      try {
-        await supabase.from("stars_ledger").insert([{
-          user_id: user.id,
-          change: add,
-          reason: "slot_reward",
-          meta: { slot_id: slot.id, value }
-        }]);
-      } catch {}
-
-      balance_after = balance_after + add;
+      balance_after += add;
       status = "win_stars";
 
     } else if (prize_type === "gift") {
@@ -181,7 +164,7 @@ export const spinSlot = async (req, res) => {
       status = "win_gift";
     }
 
-    // запись спина
+    // запись спина (сохраняем фактический prize_amount)
     const spin_id = uuidv4();
     const idem = idempotency_key || uuidv4();
     const { error: spinErr } = await supabase
@@ -200,7 +183,7 @@ export const spinSlot = async (req, res) => {
         balance_after,
         pay_currency: "stars",
         prize_type,
-        prize_amount,
+        prize_amount: computedPrize,
         inventory_id,
         idempotency_key: idem
       }]);
@@ -216,9 +199,12 @@ export const spinSlot = async (req, res) => {
         r: outcome.symbol_right,
       },
       effect_key: outcome.effect_key,
-      prize: prize_type
-        ? { type: prize_type, amount: prize_amount ?? undefined }
-        : undefined,
+      prize:
+        prize_type === "stars"
+          ? { type: "stars", amount: computedPrize }
+          : prize_type === "gift"
+          ? { type: "gift" }
+          : undefined,
       inventory_id: inventory_id ?? undefined,
       balance_before,
       balance_after,
@@ -233,7 +219,7 @@ export const getActiveSlots = async (_req, res) => {
   try {
     const { data, error } = await supabase
       .from("slots")
-      .select("id, name, price, gift_count, is_infinite, active, nft_name")
+      .select("id, name, price, gift_count, is_infinite, active, nft_name, stars_prize")
       .eq("active", true)
       .order("name", { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
@@ -254,7 +240,7 @@ export const getOutcomes = async (_req, res) => {
     const { data, error } = await supabase
       .from("slot_outcomes")
       .select(
-        "value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type, prize_amount"
+        "value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type"
       )
       .order("value", { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
@@ -267,7 +253,7 @@ export const getOutcomes = async (_req, res) => {
         r: o.symbol_right,
         effect_key: o.effect_key,
         prize: o.prize_type
-          ? { type: o.prize_type, amount: o.prize_amount ?? undefined }
+          ? { type: o.prize_type }
           : { type: "none" },
       };
     }
