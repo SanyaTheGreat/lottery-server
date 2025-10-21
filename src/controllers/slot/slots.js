@@ -219,9 +219,9 @@ export const getActiveSlots = async (_req, res) => {
   try {
     const { data, error } = await supabase
       .from("slots")
-      .select("id, name, price, gift_count, is_infinite, active, nft_name, stars_prize")
+      .select("id, price, gift_count, is_infinite, active, nft_name, stars_prize")
       .eq("active", true)
-      .order("name", { ascending: true });
+      .order("price", { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
 
     const list = (data || []).map((s) => ({

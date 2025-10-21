@@ -13,6 +13,7 @@ export const createSlot = async (req, res) => {
     }
 
     const {
+      slug,
       nft_name,
       price,
       stars_prize = 0,
@@ -31,10 +32,10 @@ export const createSlot = async (req, res) => {
     const { data, error } = await supabase
       .from("slots")
       .insert([
-        { nft_name, price, gift_price, stars_prize, gift_count, is_infinite, active },
+        {slug, nft_name, price, gift_price, stars_prize, gift_count, is_infinite, active },
       ])
       .select(
-        "id,  nft_name, price, gift_price, stars_prize, gift_count, is_infinite, active"
+        "id, slug, nft_name, price, gift_price, stars_prize, gift_count, is_infinite, active"
       )
       .single();
 
