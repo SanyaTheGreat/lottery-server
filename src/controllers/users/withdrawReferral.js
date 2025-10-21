@@ -74,12 +74,15 @@ const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Ошибка отправки TON. Попробуйте позже.' });
     }
 
-    // 4️⃣ Обновляем баланс
+    // 4) Атомарно уменьшаем баланс (с допуском на хвосты)
+    const EPS = 1e-6; // допуск ~0.000001 TON для точных сравнений
+    const newBalance = round2(Math.max(0, (Number(user.referral_earnings || 0)) - sum));
+
     const { data: updatedUser, error: decErr } = await supabase
       .from('users')
-      .update({ referral_earnings: round2(available - sum) })
+      .update({ referral_earnings: newBalance })
       .eq('telegram_id', telegram_id)
-      .gte('referral_earnings', sum)
+      .gte('referral_earnings', sum - EPS)  // <-- ключевой момент
       .select('referral_earnings')
       .single();
 
@@ -87,9 +90,9 @@ const withdrawReferral = async (req, res) => {
       await supabase
         .from('referral_withdrawals')
         .update({
-          status: 'sent_needs_manual_fix',
-          error_message: decErr?.message || 'Balance update failed after send',
-          confirmed_at: new Date().toISOString()
+        status: 'sent_needs_manual_fix',
+        error_message: decErr?.message || 'Balance update failed after send',
+        confirmed_at: new Date().toISOString()
         })
         .eq('id', createdWd.id);
 
