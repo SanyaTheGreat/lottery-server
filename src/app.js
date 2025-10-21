@@ -50,36 +50,49 @@ app.use(express.json());
 // Telegram webhook (оставляем публичным)
 app.post('/tg/webhook', telegramWebhook);
 
-// 🔐 Новый эндпоинт авторизации через initData → JWT
 app.post('/auth/telegram', async (req, res) => {
   try {
     const { initData } = req.body || {};
     const v = verifyTelegramWebApp(initData, process.env.BOT_TOKEN, 86400);
     if (!v.ok) return res.status(403).json({ ok: false, error: v.reason });
 
-    const u = v.user; // { id, username, ... }
-    const payload = { telegram_id: Number(u.id), username: u.username ?? null };
+    const u = v.user; // объект из Telegram initData
 
-    // 🔸 Апдейт/создание пользователя (upsert)
-    const { error } = await supabase
+    // 🧩 берём только нужное
+    const payload = {
+      telegram_id: Number(u.id),
+      username: u.username ?? null,
+      avatar_url: u.photo_url ?? null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // 🔹 апсерт (создаёт или обновляет по telegram_id)
+    const { data, error } = await supabase
       .from('users')
-      .upsert({
-        telegram_id: payload.telegram_id,
-        username: payload.username,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'telegram_id' });
+      .upsert(payload, { onConflict: 'telegram_id' })
+      .select()
+      .single();
 
-    if (error) console.error("❌ Ошибка upsert:", error.message);
+    if (error) {
+      console.error("❌ Ошибка upsert:", error.message);
+      return res.status(500).json({ ok: false, error: 'Insert/update failed' });
+    }
 
-    // 🔸 Формируем JWT (24 часа)
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '24h' });
+    // 🔐 создаём JWT (24 часа)
+    const token = jwt.sign(
+      { telegram_id: payload.telegram_id, username: payload.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
-    return res.json({ ok: true, token, user: payload });
+    console.log(`✅ User ${payload.username || payload.telegram_id} авторизован`);
+    return res.json({ ok: true, token, user: data });
   } catch (err) {
     console.error("❌ Ошибка /auth/telegram:", err);
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 });
+
 
 // --- приватная зона (требует JWT) ---
 app.use(['/wheel', '/payments', '/api', '/inventory', '/users', '/gifts'], requireJwt());
