@@ -35,8 +35,10 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Кошелёк не привязан. Сначала добавьте TON-адрес в профиле.' });
     }
 
-    const available = Number(user.referral_earnings || 0);
-    const sum = normAmount(amountNum);
+    // ⚙️ исправленное вычисление с точностью до 9 знаков
+    const available = Math.floor(Number(user.referral_earnings || 0) * 1e9) / 1e9;
+    const sum = Math.floor(amountNum * 1e9) / 1e9;
+
     if (sum > available) {
       return res.status(400).json({ error: 'Недостаточно средств для вывода' });
     }
@@ -77,7 +79,6 @@ const withdrawReferral = async (req, res) => {
     }
 
     // 4) Атомарно уменьшаем баланс (проверяем, что хватит средств)
-    // делаем условный апдейт: referral_earnings = referral_earnings - sum, только если >= sum
     const { data: updatedUser, error: decErr } = await supabase
       .from('users')
       .update({ referral_earnings: normAmount(available - sum) })
@@ -87,7 +88,6 @@ const withdrawReferral = async (req, res) => {
       .single();
 
     if (decErr || !updatedUser) {
-      // редкий случай гонки: TON уже отправили, а списание не прошло — зафиксируем для ручной проверки
       await supabase
         .from('referral_withdrawals')
         .update({
