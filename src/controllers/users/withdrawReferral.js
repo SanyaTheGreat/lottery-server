@@ -1,8 +1,8 @@
 import { supabase } from '../../services/supabaseClient.js';
 import { sendTon } from '../../utils/tonSender.js';
 
-// округление до 9 знаков (TON)
-const normAmount = (n) => Number.parseFloat(Number(n).toFixed(9));
+// округление до 2 знаков (для вывода пользователю)
+const round2 = (n) => Number.parseFloat(Number(n).toFixed(2));
 
 const withdrawReferral = async (req, res) => {
   try {
@@ -10,7 +10,6 @@ const withdrawReferral = async (req, res) => {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: 'Unauthorized' });
 
-    // берём только сумму из тела
     const { amount } = req.body || {};
     const amountNum = Number(amount);
 
@@ -21,7 +20,7 @@ const withdrawReferral = async (req, res) => {
       return res.status(400).json({ error: 'Минимальная сумма для вывода — 3 TON' });
     }
 
-    // 1) Читаем пользователя (кошелёк и баланс рефералок)
+    // 1️⃣ Читаем пользователя (кошелёк и баланс)
     const { data: user, error: userErr } = await supabase
       .from('users')
       .select('id, wallet, referral_earnings')
@@ -32,25 +31,25 @@ const withdrawReferral = async (req, res) => {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
     if (!user.wallet) {
-      return res.status(400).json({ error: 'Кошелёк не привязан. Сначала добавьте TON-адрес в профиле.' });
+      return res.status(400).json({ error: 'Кошелёк не привязан. Добавьте TON-адрес в профиле.' });
     }
 
-    // ⚙️ исправленное вычисление с точностью до 9 знаков
-    const available = Math.floor(Number(user.referral_earnings || 0) * 1e9) / 1e9;
-    const sum = Math.floor(amountNum * 1e9) / 1e9;
+    // ⚙️ Округляем баланс и сумму до 2 знаков
+    const available = round2(user.referral_earnings || 0);
+    const sum = round2(amountNum);
 
     if (sum > available) {
       return res.status(400).json({ error: 'Недостаточно средств для вывода' });
     }
 
-    // 2) Создаём запись о выводе в статусе pending
+    // 2️⃣ Создаём запись о выводе
     const nowISO = new Date().toISOString();
     const { data: createdWd, error: insErr } = await supabase
       .from('referral_withdrawals')
       .insert([{
         telegram_id,
         user_id: user.id,
-        wallet: user.wallet,          // ⚠️ кошелёк берём из БД, не из клиента
+        wallet: user.wallet,
         amount: sum,
         status: 'pending',
         created_at: nowISO,
@@ -63,13 +62,11 @@ const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Не удалось создать заявку на вывод' });
     }
 
-    // 3) Пытаемся отправить TON
+    // 3️⃣ Отправляем TON
     try {
       await sendTon(user.wallet, sum);
     } catch (sendErr) {
       console.error('❌ sendTon failed:', sendErr?.message || sendErr);
-
-      // помечаем как failed, без списания реф.баланса
       await supabase
         .from('referral_withdrawals')
         .update({ status: 'failed', error_message: String(sendErr?.message || sendErr), failed_at: new Date().toISOString() })
@@ -78,10 +75,10 @@ const withdrawReferral = async (req, res) => {
       return res.status(500).json({ error: 'Ошибка отправки TON. Попробуйте позже.' });
     }
 
-    // 4) Атомарно уменьшаем баланс (проверяем, что хватит средств)
+    // 4️⃣ Обновляем баланс
     const { data: updatedUser, error: decErr } = await supabase
       .from('users')
-      .update({ referral_earnings: normAmount(available - sum) })
+      .update({ referral_earnings: round2(available - sum) })
       .eq('telegram_id', telegram_id)
       .gte('referral_earnings', sum)
       .select('referral_earnings')
@@ -103,7 +100,7 @@ const withdrawReferral = async (req, res) => {
       });
     }
 
-    // 5) Подтверждаем вывод
+    // 5️⃣ Подтверждаем вывод
     await supabase
       .from('referral_withdrawals')
       .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
