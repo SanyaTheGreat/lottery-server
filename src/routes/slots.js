@@ -1,6 +1,6 @@
 // src/routes/slots.js
 import express from "express";
-import { requireJwt } from "../../middleware/requireJwt.js";
+import { requireJwt } from "../middleware/requireJwt.js";
 
 import {
   spinSlot, getActiveSlots, getOutcomes, getSlotsHistory,
