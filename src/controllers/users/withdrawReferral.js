@@ -48,7 +48,6 @@ const withdrawReferral = async (req, res) => {
       .from('referral_withdrawals')
       .insert([{
         telegram_id,
-        user_id: user.id,
         wallet: user.wallet,
         amount: sum,
         status: 'pending',
