@@ -185,6 +185,7 @@ export const spinSlot = async (req, res) => {
         user_id: user.id,
         status,
         value,
+        cost: price,
         pay_currency: "stars",
         prize_type,
         prize_amount: computedPrize,
