@@ -16,13 +16,15 @@ import {
 
 const r = express.Router();
 
+// публичные
 r.get("/slots/active", getActiveSlots);
 r.get("/slots/outcomes", getOutcomes);
 
-r.post("/slots/spin", requireJwt, spinSlot);
-r.get("/slots/history", requireJwt, getSlotsHistory);
+// защищённые (JWT)
+r.post("/slots/spin", requireJwt(), spinSlot);
+r.get("/slots/history", requireJwt(), getSlotsHistory);
 
-r.get("/inventory", requireJwt, getInventory);
-r.post("/inventory/:id/claim", requireJwt, claimInventory);
+r.get("/inventory", requireJwt(), getInventory);
+r.post("/inventory/:id/claim", requireJwt(), claimInventory);
 
 export default r;
