@@ -95,31 +95,37 @@ export const spinSlot = async (req, res) => {
     if (debitErr)
       return res.status(500).json({ error: debitErr.message });
 
-    // рефералка (только запись)
-    
-    console.time("insert-referral");
-    const referrerId = user.referred_by;
-    const refAmountTon = Number(slot.ref_earn || 0);
+    // 💰 --- РЕФЕРАЛЬНЫЕ НАЧИСЛЕНИЯ (только запись в referral_earnings) ---
+    console.time("insert-referral"); // замер времени вставки (для диагностики производительности)
 
+    const referrerId = user.referred_by;              // UUID пользователя, который пригласил текущего
+    const refAmountTon = Number(slot.ref_earn || 0);  // сумма бонуса, определена в настройках слота (ref_earn)
+
+    // 👉 вставляем запись в таблицу referral_earnings только если есть реферер и сумма > 0
     if (referrerId && refAmountTon > 0) {
       const { data: refIns, error: refErr } = await supabase
         .from("referral_earnings")
-        .insert([{
-          referrer_id: referrerId,
-          referred_id: user.id,
-          wheel_id: null,
-          amount: refAmountTon,
-        }])
-        .select("id")
-        .single();
+        .insert([
+          {
+            referrer_id: referrerId,   // кто получает бонус
+            referred_id: user.id,      // кто сделал спин (и принёс бонус)
+            wheel_id: null,            // в слотах не используется (для совместимости с розыгрышами)
+            amount: refAmountTon,      // размер бонуса (TON или звёзды — по настройке проекта)
+          },
+        ])
+        .select("id")                  // возвращаем id новой записи (для отладки)
+        .single();                     // берём одну запись
 
+      // --- отладочный вывод ---
       if (refErr) {
         console.error("❌ referral_earnings insert error:", refErr);
       } else {
         console.log("✅ referral_earnings inserted:", refIns?.id);
       }
     }
-    console.timeEnd("insert-referral");
+
+    console.timeEnd("insert-referral"); // завершение замера времени вставки
+
 
 
     // RNG
