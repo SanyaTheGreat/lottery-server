@@ -1,8 +1,9 @@
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
-// POST /api/slots/spin   🔐 JWT
-// body: { slot_id: uuid, idempotency_key?: uuid }
+/* ========================
+   🔹 spinSlot (обновлённая с логами)
+======================== */
 export const spinSlot = async (req, res) => {
   console.log("=== spinSlot start ===");
   console.time("spinSlot-total");
@@ -225,5 +226,132 @@ export const spinSlot = async (req, res) => {
     console.error("spinSlot failed:", err);
     console.timeEnd("spinSlot-total");
     return res.status(500).json({ error: "spinSlot failed" });
+  }
+};
+
+/* ========================
+   🔹 getActiveSlots
+======================== */
+export const getActiveSlots = async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("slots")
+      .select(
+        "id, price, gift_count, is_infinite, active, nft_name, stars_prize, ref_earn"
+      )
+      .eq("active", true)
+      .order("price", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const list = (data || []).map((s) => ({
+      ...s,
+      available: !!(s.is_infinite || Number(s.gift_count) > 0),
+    }));
+    return res.json(list);
+  } catch {
+    return res.status(500).json({ error: "getActiveSlots failed" });
+  }
+};
+
+/* ========================
+   🔹 getOutcomes
+======================== */
+export const getOutcomes = async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("slot_outcomes")
+      .select(
+        "value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type"
+      )
+      .order("value", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const map = {};
+    for (const o of data || []) {
+      map[o.value] = {
+        l: o.symbol_left,
+        m: o.symbol_mid,
+        r: o.symbol_right,
+        effect_key: o.effect_key,
+        prize: o.prize_type
+          ? { type: o.prize_type }
+          : { type: "none" },
+      };
+    }
+    return res.json(map);
+  } catch {
+    return res.status(500).json({ error: "getOutcomes failed" });
+  }
+};
+
+/* ========================
+   🔹 getSlotsHistory
+======================== */
+export const getSlotsHistory = async (req, res) => {
+  try {
+    const telegram_id = req.user?.telegram_id;
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
+    const limit = Math.min(Number(req.query.limit || 20), 100);
+
+    const { data: user } = await supabase
+      .from("users")
+      .select("id")
+      .eq("telegram_id", telegram_id)
+      .single();
+
+    const { data, error } = await supabase
+      .from("slot_spins")
+      .select(
+        "id, created_at, slot_id, status, value, symbol_left, symbol_mid, symbol_right, prize_type, prize_amount"
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    return res.json(
+      (data || []).map((r) => ({
+        id: r.id,
+        created_at: r.created_at,
+        slot_id: r.slot_id,
+        status: r.status,
+        value: r.value,
+        symbols: { l: r.symbol_left, m: r.symbol_mid, r: r.symbol_right },
+        prize: r.prize_type
+          ? { type: r.prize_type, amount: r.prize_amount ?? undefined }
+          : undefined,
+      }))
+    );
+  } catch {
+    return res.status(500).json({ error: "getSlotsHistory failed" });
+  }
+};
+
+/* ========================
+   🔹 getInventory
+======================== */
+export const getInventory = async (req, res) => {
+  try {
+    const telegram_id = req.user?.telegram_id;
+    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
+    const { data: user } = await supabase
+      .from("users")
+      .select("id")
+      .eq("telegram_id", telegram_id)
+      .single();
+
+    const { data, error } = await supabase
+      .from("user_inventory")
+      .select("id, slot_id, nft_name, status, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch {
+    return res.status(500).json({ error: "getInventory failed" });
   }
 };
