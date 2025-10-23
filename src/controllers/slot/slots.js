@@ -95,36 +95,72 @@ export const spinSlot = async (req, res) => {
     if (debitErr)
       return res.status(500).json({ error: debitErr.message });
 
-    // 💰 --- РЕФЕРАЛЬНЫЕ НАЧИСЛЕНИЯ (только запись в referral_earnings) ---
-    console.time("insert-referral"); // замер времени вставки (для диагностики производительности)
+    // 💰 --- РЕФЕРАЛЬНЫЕ НАЧИСЛЕНИЯ: запись + инкремент у реферера ---
+    console.time("insert-referral");
+    try {
+      const referrerId = user.referred_by;              // UUID пригласившего
+      const refAmountTon = Number(slot.ref_earn || 0);  // сумма бонуса из слота
 
-    const referrerId = user.referred_by;              // UUID пользователя, который пригласил текущего
-    const refAmountTon = Number(slot.ref_earn || 0);  // сумма бонуса, определена в настройках слота (ref_earn)
+      if (referrerId && refAmountTon > 0) {
+        // 1) лог-строка для наглядности
+        console.log("[ref] try insert & credit", {
+          referrerId,
+          referredId: user.id,
+          refEarn: refAmountTon,
+        });
 
-    // 👉 вставляем запись в таблицу referral_earnings только если есть реферер и сумма > 0
-    if (referrerId && refAmountTon > 0) {
-      const { data: refIns, error: refErr } = await supabase
-        .from("referral_earnings")
-        .insert([
-          {
-            referrer_id: referrerId,   // кто получает бонус
-            referred_id: user.id,      // кто сделал спин (и принёс бонус)
-            wheel_id: null,            // в слотах не используется (для совместимости с розыгрышами)
-            amount: refAmountTon,      // размер бонуса (TON или звёзды — по настройке проекта)
-          },
-        ])
-        .select("id")                  // возвращаем id новой записи (для отладки)
-        .single();                     // берём одну запись
+        // 2) запись в referral_earnings (лог)
+        const { data: refIns, error: refErr } = await supabase
+          .from("referral_earnings")
+          .insert([
+            {
+              referrer_id: referrerId,   // кто получает бонус
+              referred_id: user.id,      // кто сделал спин
+              wheel_id: null,            // для совместимости с розыгрышами
+              amount: refAmountTon,      // размер бонуса
+            },
+          ])
+          .select("id")
+          .single();
 
-      // --- отладочный вывод ---
-      if (refErr) {
-        console.error("❌ referral_earnings insert error:", refErr);
-      } else {
-        console.log("✅ referral_earnings inserted:", refIns?.id);
+        if (refErr) {
+          console.error("❌ referral_earnings insert error:", refErr);
+        } else {
+          console.log("✅ referral_earnings inserted:", refIns?.id);
+
+          // 3) инкремент агрегата у реферера в users.referral_earnings
+          console.time("update-referrer-aggregate");
+          const { data: refUser, error: getRefErr } = await supabase
+            .from("users")
+            .select("referral_earnings")
+            .eq("id", referrerId)
+            .single();
+
+          if (getRefErr) {
+            console.error("❌ users select(referral_earnings) error:", getRefErr);
+          } else {
+            const current = Number(refUser?.referral_earnings || 0);
+            const next = current + refAmountTon;
+
+            const { error: updRefErr } = await supabase
+              .from("users")
+              .update({ referral_earnings: next })
+              .eq("id", referrerId);
+
+            if (updRefErr) {
+              console.error("❌ users update(referral_earnings) error:", updRefErr);
+            } else {
+              console.log(`✅ users.referral_earnings updated: ${current} → ${next}`);
+            }
+          }
+          console.timeEnd("update-referrer-aggregate");
+        }
       }
+    } catch (e) {
+      console.error("⚠️ referral block failed:", e);
     }
+    console.timeEnd("insert-referral");
 
-    console.timeEnd("insert-referral"); // завершение замера времени вставки
 
 
 
