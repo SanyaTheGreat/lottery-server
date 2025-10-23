@@ -1,8 +1,10 @@
+// src/controllers/slot/slots.js
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
+// POST /api/slots/spin   🔐 JWT
+// body: { slot_id: uuid, idempotency_key?: uuid }
 export const spinSlot = async (req, res) => {
-  const start = Date.now();
   try {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
@@ -17,17 +19,13 @@ export const spinSlot = async (req, res) => {
         .select("id, status, value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type, prize_amount, inventory_id")
         .eq("idempotency_key", idempotency_key)
         .maybeSingle();
-
       if (existing) {
-        console.log(`[slot] idem hit ${existing.id}`);
         return res.json({
           spin_id: existing.id,
           status: existing.status,
-          symbols: {
-            l: existing.symbol_left,
-            m: existing.symbol_mid,
-            r: existing.symbol_right,
-          },
+          value: existing.value,
+          symbols: { l: existing.symbol_left, m: existing.symbol_mid, r: existing.symbol_right },
+          effect_key: existing.effect_key,
           prize: existing.prize_type
             ? { type: existing.prize_type, amount: existing.prize_amount ?? undefined }
             : undefined,
@@ -36,15 +34,14 @@ export const spinSlot = async (req, res) => {
       }
     }
 
-    // slot
+    // slot info
     const { data: slot, error: slotErr } = await supabase
       .from("slots")
-      .select("id, active, price, gift_count, is_infinite, nft_name, stars_prize")
+      .select("id, active, price, gift_count, is_infinite, nft_name, stars_prize, ref_earn")
       .eq("id", slot_id)
       .single();
     if (slotErr || !slot) return res.status(404).json({ error: "Слот не найден" });
-    if (!slot.active) return res.status(409).json({ error: "Слот не активен" });
-
+    if (!slot.active) return res.status(404).json({ error: "Слот не активен" });
     const available = !!(slot.is_infinite || Number(slot.gift_count) > 0);
     if (!available) return res.status(409).json({ error: "Слот недоступен (нет подарков)" });
 
@@ -57,144 +54,114 @@ export const spinSlot = async (req, res) => {
     if (uErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
 
     const price = Number(slot.price || 0);
-    const balance_before = Number(user.stars || 0);
-    if (balance_before < price) {
+    const balance = Number(user.stars || 0);
+    if (balance < price) {
       return res.status(402).json({ error: `Не хватает ⭐ (нужно ${price})` });
     }
 
     // списание
-    await supabase.from("users").update({ stars: balance_before - price }).eq("id", user.id);
+    await supabase
+      .from("users")
+      .update({ stars: balance - price })
+      .eq("id", user.id);
 
     // RNG
     const value = 1 + Math.floor(Math.random() * 64);
-
-    const { data: outcome } = await supabase
+    const { data: outcome, error: outErr } = await supabase
       .from("slot_outcomes")
-      .select("symbol_left, symbol_mid, symbol_right, effect_key, prize_type")
+      .select("value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type")
       .eq("value", value)
-      .maybeSingle();
-    if (!outcome) return res.status(500).json({ error: "Нет slot_outcomes для value" });
+      .single();
+    if (outErr || !outcome)
+      return res.status(500).json({ error: "Не настроен slot_outcomes для value" });
 
     let status = "lose";
     let prize_type = outcome.prize_type || null;
     let computedPrize = 0;
-    let balance_after = balance_before - price;
     let inventory_id = null;
 
     if (prize_type === "stars" && Number(slot.stars_prize) > 0) {
       computedPrize = Number(slot.stars_prize);
-      balance_after += computedPrize;
       await supabase
         .from("users")
-        .update({ stars: balance_after })
+        .update({ stars: balance - price + computedPrize })
         .eq("id", user.id);
       status = "win_stars";
+
     } else if (prize_type === "gift") {
       const invId = uuidv4();
-      await supabase
+      const { data: inv } = await supabase
         .from("user_inventory")
-        .insert([
-          {
-            id: invId,
-            user_id: user.id,
-            slot_id: slot.id,
-            nft_name: slot.nft_name,
-            status: "jackpot",
-          },
-        ]);
-      inventory_id = invId;
+        .insert([{
+          id: invId,
+          user_id: user.id,
+          slot_id: slot.id,
+          nft_name: slot.nft_name,
+          status: "jackpot",
+        }])
+        .select("id")
+        .single();
+      inventory_id = inv?.id ?? null;
       status = "win_gift";
     }
 
     // запись спина
     const spin_id = uuidv4();
     const idem = idempotency_key || uuidv4();
-    await supabase.from("slot_spins").insert([
-      {
-        id: spin_id,
-        slot_id: slot.id,
-        user_id: user.id,
-        status,
-        value,
-        symbol_left: outcome.symbol_left,
-        symbol_mid: outcome.symbol_mid,
-        symbol_right: outcome.symbol_right,
-        effect_key: outcome.effect_key,
-        balance_before,
-        balance_after,
-        pay_currency: "stars",
-        prize_type,
-        prize_amount: computedPrize,
-        inventory_id,
-        idempotency_key: idem,
-      },
-    ]);
+    await supabase.from("slot_spins").insert([{
+      id: spin_id,
+      slot_id: slot.id,
+      user_id: user.id,
+      status,
+      value,
+      symbol_left: outcome.symbol_left,
+      symbol_mid: outcome.symbol_mid,
+      symbol_right: outcome.symbol_right,
+      effect_key: outcome.effect_key,
+      pay_currency: "stars",
+      prize_type,
+      prize_amount: computedPrize,
+      inventory_id,
+      idempotency_key: idem,
+    }]);
 
-    // 👉 мгновенный ответ пользователю
+    // ответ пользователю сразу
     res.json({
       spin_id,
       status,
-      symbols: {
-        l: outcome.symbol_left,
-        m: outcome.symbol_mid,
-        r: outcome.symbol_right,
-      },
+      value,
+      symbols: { l: outcome.symbol_left, m: outcome.symbol_mid, r: outcome.symbol_right },
+      effect_key: outcome.effect_key,
       prize:
         prize_type === "stars"
           ? { type: "stars", amount: computedPrize }
           : prize_type === "gift"
           ? { type: "gift" }
           : undefined,
-      balance_before,
-      balance_after,
+      inventory_id: inventory_id ?? undefined,
     });
 
-    // фоновая рефералка (не блокирует ответ)
-    setImmediate(async () => {
-      try {
-        const referrerId = user.referred_by || null;
-        if (referrerId) {
-          const { data: rateRow } = await supabase
-            .from("fx_rates")
-            .select("stars_per_ton")
-            .eq("id", 1)
-            .single();
-          const spt = Number(rateRow?.stars_per_ton || 0);
-          if (spt > 0) {
-            const priceTon = price / spt;
-            const refAmountTon = +(priceTon * 0.05).toFixed(9);
-            if (refAmountTon > 0) {
-              await supabase.from("referral_earnings").insert([
-                {
-                  referrer_id: referrerId,
-                  referred_id: user.id,
-                  wheel_id: null,
-                  amount: refAmountTon,
-                },
-              ]);
-              const { data: refUser } = await supabase
-                .from("users")
-                .select("referral_earnings")
-                .eq("id", referrerId)
-                .single();
-              await supabase
-                .from("users")
-                .update({
-                  referral_earnings:
-                    Number(refUser?.referral_earnings || 0) + refAmountTon,
-                })
-                .eq("id", referrerId);
-            }
-          }
+    // рефералка — в фоне
+    if (user.referred_by && Number(slot.ref_earn) > 0) {
+      setImmediate(async () => {
+        try {
+          await supabase.from("referral_earnings").insert([{
+            referrer_id: user.referred_by,
+            referred_id: user.id,
+            wheel_id: null,
+            amount: Number(slot.ref_earn),
+          }]);
+          await supabase.rpc("increment_referral_earnings", {
+            user_id_input: user.referred_by,
+            add_amount: Number(slot.ref_earn),
+          });
+        } catch (e) {
+          console.warn("[referral_skip]", e.message);
         }
-      } catch (e) {
-        console.warn("[slot-referral] background skipped:", e?.message);
-      } finally {
-        console.log(`[slot] background done in ${Date.now() - start}ms`);
-      }
-    });
+      });
+    }
   } catch (e) {
-    console.error("[slot-spin] failed:", e);
+    console.error("spinSlot failed:", e);
     return res.status(500).json({ error: "spinSlot failed" });
   }
 };
