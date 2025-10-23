@@ -96,24 +96,31 @@ export const spinSlot = async (req, res) => {
       return res.status(500).json({ error: debitErr.message });
 
     // рефералка (только запись)
+    
     console.time("insert-referral");
-    try {
-      const referrerId = user.referred_by;
-      const refAmountTon = Number(slot.ref_earn || 0);
-      if (referrerId && refAmountTon > 0) {
-        await supabase.from("referral_earnings").insert([
-          {
-            referrer_id: referrerId,
-            referred_id: user.id,
-            wheel_id: null,
-            amount: refAmountTon,
-          },
-        ]);
+    const referrerId = user.referred_by;
+    const refAmountTon = Number(slot.ref_earn || 0);
+
+    if (referrerId && refAmountTon > 0) {
+      const { data: refIns, error: refErr } = await supabase
+        .from("referral_earnings")
+        .insert([{
+          referrer_id: referrerId,
+          referred_id: user.id,
+          wheel_id: null,
+          amount: refAmountTon,
+        }])
+        .select("id")
+        .single();
+
+      if (refErr) {
+        console.error("❌ referral_earnings insert error:", refErr);
+      } else {
+        console.log("✅ referral_earnings inserted:", refIns?.id);
       }
-    } catch (err) {
-      console.log("⚠️ Ошибка записи referral_earnings:", err.message);
     }
     console.timeEnd("insert-referral");
+
 
     // RNG
     const value = 1 + Math.floor(Math.random() * 64);
