@@ -378,14 +378,11 @@ export const getSlotsHistory = async (req, res) => {
   }
 };
 
-// GET /api/inventory   🔐 JWT
-export const getInventory = async (req, res) => {
+// GET /api/inventory/slot
+export const getSlotInventory = async (req, res) => {
   try {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
-
-    // ── логи для проверки соответствия пользователя
-    // console.log("[inv] jwt.telegram_id =", telegram_id);
 
     const { data: user, error: userErr } = await supabase
       .from("users")
@@ -403,16 +400,15 @@ export const getInventory = async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // ── ВАЖНО: отключаем кэш именно для этого ответа
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
-    // убрать ETag у этого ответа (делай до отправки тела)
     res.removeHeader?.("ETag");
 
     return res.status(200).json(data || []);
-  } catch (e) {
-    return res.status(500).json({ error: "getInventory failed" });
+  } catch {
+    return res.status(500).json({ error: "getSlotInventory failed" });
   }
 };
+
 
