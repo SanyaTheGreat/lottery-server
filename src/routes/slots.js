@@ -11,7 +11,7 @@ import {
 
 import {
   getInventory,
-  claimInventory,
+  withdrawSlotItem
 } from "../controllers/slot/inventory.js";
 
 const r = express.Router();
