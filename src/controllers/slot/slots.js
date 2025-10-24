@@ -378,19 +378,22 @@ export const getSlotsHistory = async (req, res) => {
   }
 };
 
-/* ========================
-   🔹 getInventory
-======================== */
+// GET /api/inventory   🔐 JWT
 export const getInventory = async (req, res) => {
   try {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
 
-    const { data: user } = await supabase
+    // ── логи для проверки соответствия пользователя
+    // console.log("[inv] jwt.telegram_id =", telegram_id);
+
+    const { data: user, error: userErr } = await supabase
       .from("users")
       .select("id")
       .eq("telegram_id", telegram_id)
       .single();
+
+    if (userErr || !user) return res.status(404).json({ error: "User not found" });
 
     const { data, error } = await supabase
       .from("user_inventory")
@@ -399,8 +402,17 @@ export const getInventory = async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data || []);
-  } catch {
+
+    // ── ВАЖНО: отключаем кэш именно для этого ответа
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    // убрать ETag у этого ответа (делай до отправки тела)
+    res.removeHeader?.("ETag");
+
+    return res.status(200).json(data || []);
+  } catch (e) {
     return res.status(500).json({ error: "getInventory failed" });
   }
 };
+
