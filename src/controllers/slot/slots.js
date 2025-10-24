@@ -2,7 +2,7 @@ import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
 /* ========================
-   🔹 spinSlot (обновлённая с логами)
+   🔹 spinSlot (обновлённая с логами + support "bonus")
 ======================== */
 export const spinSlot = async (req, res) => {
   console.log("=== spinSlot start ===");
@@ -102,22 +102,20 @@ export const spinSlot = async (req, res) => {
       const refAmountTon = Number(slot.ref_earn || 0);  // сумма бонуса из слота
 
       if (referrerId && refAmountTon > 0) {
-        // 1) лог-строка для наглядности
         console.log("[ref] try insert & credit", {
           referrerId,
           referredId: user.id,
           refEarn: refAmountTon,
         });
 
-        // 2) запись в referral_earnings (лог)
         const { data: refIns, error: refErr } = await supabase
           .from("referral_earnings")
           .insert([
             {
-              referrer_id: referrerId,   // кто получает бонус
-              referred_id: user.id,      // кто сделал спин
-              wheel_id: null,            // для совместимости с розыгрышами
-              amount: refAmountTon,      // размер бонуса
+              referrer_id: referrerId,
+              referred_id: user.id,
+              wheel_id: null,
+              amount: refAmountTon,
             },
           ])
           .select("id")
@@ -128,7 +126,6 @@ export const spinSlot = async (req, res) => {
         } else {
           console.log("✅ referral_earnings inserted:", refIns?.id);
 
-          // 3) инкремент агрегата у реферера в users.referral_earnings
           console.time("update-referrer-aggregate");
           const { data: refUser, error: getRefErr } = await supabase
             .from("users")
@@ -161,9 +158,6 @@ export const spinSlot = async (req, res) => {
     }
     console.timeEnd("insert-referral");
 
-
-
-
     // RNG
     const value = 1 + Math.floor(Math.random() * 64);
 
@@ -183,13 +177,15 @@ export const spinSlot = async (req, res) => {
     // результат
     let status = "lose";
     let prize_type = outcome.prize_type || null;
-    const computedPrize =
-      prize_type === "stars" ? Number(slot.stars_prize || 0) : 0;
+
+    // ▶︎ расширение: поддерживаем "bonus" как эквивалент звёздной награды
+    const isStarsLike = prize_type === "stars" || prize_type === "bonus";
+    const computedPrize = isStarsLike ? Number(slot.stars_prize || 0) : 0;
 
     let inventory_id = null;
 
     console.time("handle-prize");
-    if (prize_type === "stars" && computedPrize > 0) {
+    if (isStarsLike && computedPrize > 0) {
       const { error: addErr } = await supabase
         .from("users")
         .update({ stars: Number(user.stars) - price + computedPrize })
@@ -198,6 +194,7 @@ export const spinSlot = async (req, res) => {
         console.timeEnd("handle-prize");
         return res.status(500).json({ error: addErr.message });
       }
+      // оставляем статус, который ждёт фронт
       status = "win_stars";
     } else if (prize_type === "gift") {
       const invId = uuidv4();
@@ -260,8 +257,8 @@ export const spinSlot = async (req, res) => {
       },
       effect_key: outcome.effect_key,
       prize:
-        prize_type === "stars"
-          ? { type: "stars", amount: computedPrize }
+        isStarsLike
+          ? { type: prize_type, amount: computedPrize } // вернём "stars" ИЛИ "bonus"
           : prize_type === "gift"
           ? { type: "gift" }
           : undefined,
