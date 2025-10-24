@@ -25,6 +25,6 @@ r.post("/slots/spin", requireJwt(), spinSlot);
 r.get("/slots/history", requireJwt(), getSlotsHistory);
 
 r.get("/inventory/slot", requireJwt(), getInventory);
-r.post("/inventory/:id/claim", requireJwt(), claimInventory);
+r.post("/inventory/slot/:id/withdraw", requireJwt(), withdrawSlotItem);
 
 export default r;
