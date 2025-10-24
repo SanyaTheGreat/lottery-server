@@ -1,8 +1,9 @@
+// src/controllers/slot/slots.js
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
 /* ========================
-   🔹 spinSlot (обновлённая с логами + support "bonus")
+   🔹 spinSlot (с логами + support "bonus" и "jackpot")
 ======================== */
 export const spinSlot = async (req, res) => {
   console.log("=== spinSlot start ===");
@@ -21,7 +22,7 @@ export const spinSlot = async (req, res) => {
       const { data: existing } = await supabase
         .from("slot_spins")
         .select(
-          "id, status, value, symbol_left, symbol_mid, symbol_right, effect_key, prize_type, prize_amount, inventory_id"
+          "id, status, value, effect_key, prize_type, prize_amount, inventory_id, symbol_left, symbol_mid, symbol_right"
         )
         .eq("idempotency_key", idempotency_key)
         .maybeSingle();
@@ -34,12 +35,12 @@ export const spinSlot = async (req, res) => {
           spin_id: existing.id,
           status: existing.status,
           value: existing.value,
-          symbols: {
-            l: existing.symbol_left,
-            m: existing.symbol_mid,
-            r: existing.symbol_right,
-          },
+          symbols: existing.symbol_left
+            ? { l: existing.symbol_left, m: existing.symbol_mid, r: existing.symbol_right }
+            : undefined, // символы могли не писаться — ок
           effect_key: existing.effect_key,
+          is_jackpot:
+            existing.prize_type === "jackpot" || existing.effect_key === "jackpot",
           prize: existing.prize_type
             ? { type: existing.prize_type, amount: existing.prize_amount ?? undefined }
             : undefined,
@@ -158,7 +159,7 @@ export const spinSlot = async (req, res) => {
     }
     console.timeEnd("insert-referral");
 
-    // RNG
+    // RNG 1..64
     const value = 1 + Math.floor(Math.random() * 64);
 
     console.time("get-outcome");
@@ -178,7 +179,7 @@ export const spinSlot = async (req, res) => {
     let status = "lose";
     let prize_type = outcome.prize_type || null;
 
-    // ▶︎ расширение: поддерживаем "bonus" как эквивалент звёздной награды
+    // звёздные типы (support "bonus")
     const isStarsLike = prize_type === "stars" || prize_type === "bonus";
     const computedPrize = isStarsLike ? Number(slot.stars_prize || 0) : 0;
 
@@ -194,9 +195,8 @@ export const spinSlot = async (req, res) => {
         console.timeEnd("handle-prize");
         return res.status(500).json({ error: addErr.message });
       }
-      // оставляем статус, который ждёт фронт
       status = "win_stars";
-    } else if (prize_type === "gift") {
+    } else if (prize_type === "gift" || prize_type === "jackpot") {
       const invId = uuidv4();
       const { data: inv, error: invErr } = await supabase
         .from("user_inventory")
@@ -206,7 +206,7 @@ export const spinSlot = async (req, res) => {
             user_id: user.id,
             slot_id: slot.id,
             nft_name: slot.nft_name,
-            status: "jackpot",
+            status: prize_type === "jackpot" ? "jackpot" : "gift",
           },
         ])
         .select("id")
@@ -216,11 +216,11 @@ export const spinSlot = async (req, res) => {
         return res.status(500).json({ error: invErr.message });
       }
       inventory_id = inv.id;
-      status = "win_gift";
+      status = "win_gift"; // фронт уже ожидает win_gift для предметов/джекпота
     }
     console.timeEnd("handle-prize");
 
-    // запись спина
+    // запись спина (без символов; но с effect_key)
     console.time("insert-spin");
     const spin_id = uuidv4();
     const idem = idempotency_key || uuidv4();
@@ -236,12 +236,16 @@ export const spinSlot = async (req, res) => {
         prize_type,
         prize_amount: computedPrize,
         idempotency_key: idem,
+        effect_key: outcome.effect_key, // сохраняем только effect_key
       },
     ]);
     console.timeEnd("insert-spin");
 
     if (spinErr)
       return res.status(500).json({ error: spinErr.message });
+
+    const isJackpot =
+      prize_type === "jackpot" || outcome.effect_key === "jackpot";
 
     console.timeEnd("spinSlot-total");
     console.log("=== spinSlot finished ===");
@@ -250,17 +254,19 @@ export const spinSlot = async (req, res) => {
       spin_id,
       status,
       value,
+      // отдадим фронту символы прямо из outcome (мы их не денормализуем)
       symbols: {
         l: outcome.symbol_left,
         m: outcome.symbol_mid,
         r: outcome.symbol_right,
       },
       effect_key: outcome.effect_key,
+      is_jackpot: isJackpot,
       prize:
         isStarsLike
-          ? { type: prize_type, amount: computedPrize } // вернём "stars" ИЛИ "bonus"
-          : prize_type === "gift"
-          ? { type: "gift" }
+          ? { type: prize_type, amount: computedPrize } // "stars" или "bonus"
+          : prize_type === "gift" || prize_type === "jackpot"
+          ? { type: prize_type }
           : undefined,
       inventory_id: inventory_id ?? undefined,
     });
@@ -315,9 +321,7 @@ export const getOutcomes = async (_req, res) => {
         m: o.symbol_mid,
         r: o.symbol_right,
         effect_key: o.effect_key,
-        prize: o.prize_type
-          ? { type: o.prize_type }
-          : { type: "none" },
+        prize: o.prize_type ? { type: o.prize_type } : { type: "none" },
       };
     }
     return res.json(map);
@@ -345,7 +349,7 @@ export const getSlotsHistory = async (req, res) => {
     const { data, error } = await supabase
       .from("slot_spins")
       .select(
-        "id, created_at, slot_id, status, value, symbol_left, symbol_mid, symbol_right, prize_type, prize_amount"
+        "id, created_at, slot_id, status, value, symbol_left, symbol_mid, symbol_right, prize_type, prize_amount, effect_key"
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
@@ -360,7 +364,10 @@ export const getSlotsHistory = async (req, res) => {
         slot_id: r.slot_id,
         status: r.status,
         value: r.value,
-        symbols: { l: r.symbol_left, m: r.symbol_mid, r: r.symbol_right },
+        symbols: r.symbol_left
+          ? { l: r.symbol_left, m: r.symbol_mid, r: r.symbol_right }
+          : undefined,
+        effect_key: r.effect_key ?? undefined,
         prize: r.prize_type
           ? { type: r.prize_type, amount: r.prize_amount ?? undefined }
           : undefined,
