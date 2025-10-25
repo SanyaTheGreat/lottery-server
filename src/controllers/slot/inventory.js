@@ -17,25 +17,41 @@ export const getSlotInventory = async (req, res) => {
       .single();
     if (uErr || !user) return res.status(404).json({ error: "user not found" });
 
+    // ⬇️ ТЯНЕМ ТАКЖЕ slug ИЗ slots по FK slot_id
     const { data, error } = await supabase
       .from("user_inventory")
-      .select("id, slot_id, nft_name, status, created_at")
+      .select(`
+        id, slot_id, nft_name, status, created_at,
+        slots:slot_id ( slug )
+      `)
       .eq("user_id", user.id)
       .not("slot_id", "is", null)
       .order("created_at", { ascending: false });
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // нормализуем ответ: плоское поле slot_slug
+    const list = (data || []).map((x) => ({
+      id: x.id,
+      slot_id: x.slot_id,
+      nft_name: x.nft_name,
+      status: x.status,
+      created_at: x.created_at,
+      slot_slug: x.slots?.slug || null,
+    }));
+
+    // no-cache заголовки
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
     res.removeHeader?.("ETag");
 
-    return res.json(data || []);
+    return res.json(list);
   } catch (e) {
     return res.status(500).json({ error: "getSlotInventory failed" });
   }
 };
+
 
 /**
  * POST /api/inventory/slot/:id/withdraw   🔐 JWT
