@@ -21,8 +21,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://djpcftyqkwucbksknsdu.supabase.
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGNmdHlxa3d1Y2Jrc2tuc2R1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NDY3MTg4MiwiZXhwIjoyMDYwMjQ3ODgyfQ.oSMAenP7WqL19Fl8fhwx7WfwKMG4us-KQ6d_XbpIJSw")
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-TABLE = "slot_gifts"
-SCAN_LIMIT = 4  # сколько сообщений пролистывать
+TABLE = "gifts_for_cases"
+SCAN_LIMIT = 6  # сколько сообщений пролистывать
 
 
 async def ensure_peer(app: Client, peer):

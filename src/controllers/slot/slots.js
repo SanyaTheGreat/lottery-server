@@ -285,7 +285,7 @@ export const getActiveSlots = async (_req, res) => {
     const { data, error } = await supabase
       .from("slots")
       .select(
-        "id, price, gift_count, is_infinite, active, nft_name, stars_prize, ref_earn"
+        "id, slug, price, gift_count, is_infinite, active, nft_name, stars_prize, ref_earn"
       )
       .eq("active", true)
       .order("price", { ascending: true });
