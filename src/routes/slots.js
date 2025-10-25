@@ -10,7 +10,7 @@ import {
 } from "../controllers/slot/slots.js";
 
 import {
-  getInventory,
+  getSlotInventory as getInventory,
   withdrawSlotItem
 } from "../controllers/slot/inventory.js";
 

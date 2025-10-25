@@ -141,3 +141,5 @@ export const withdrawSlotItem = async (req, res) => {
     return res.status(500).json({ error: "withdrawSlotItem failed" });
   }
 };
+
+export { getSlotInventory as getInventory };
