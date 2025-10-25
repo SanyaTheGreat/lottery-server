@@ -113,7 +113,6 @@ export const withdrawSlotItem = async (req, res) => {
       nft_number: gift.nft_number,
       msg_id: gift.msg_id,
       status: "pending",
-      created_at: new Date().toISOString()
     }]);
     if (prErr) return res.status(500).json({ error: prErr.message });
 
