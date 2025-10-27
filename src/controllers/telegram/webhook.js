@@ -77,7 +77,7 @@ export default async function telegramWebhook(req, res) {
 
       const isSelfRef = ref_id && String(ref_id) === String(user.id);
       const search = new URLSearchParams();
-      if (ref_id && !isSelfRef) search.set("referrer", ref_id);
+      if (ref_id && !isSelfRef) search.set("ref", ref_id);
       search.set("tgWebAppExpand", "true");
 
       const url = `${WEBAPP_URL.replace(/\/$/, "")}/?${search.toString()}`;
