@@ -77,7 +77,7 @@ const addUser = async (req, res) => {
 
     // Реферал — однократно, если ?ref валиден и не равен tgId
     let referred_by = null;
-    const ref = req.query?.ref;
+    const ref = req.query?.ref ?? req.query?.referrer;
     if (ref && String(ref) !== String(tgId)) {
       const { data: referrer } = await supabase
         .from('users')
