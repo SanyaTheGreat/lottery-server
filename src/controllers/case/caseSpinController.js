@@ -1,6 +1,33 @@
 import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
+/* =======================
+   Anti-spam HOTFIX (drop-in)
+   ======================= */
+const inMemoryBuckets = new Map(); // userId -> {ts:number[]}
+const RUNNING = new Set();         // per-user mutex
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+async function acquireUserLock(userId) {
+  while (RUNNING.has(userId)) await sleep(15);
+  RUNNING.add(userId);
+}
+function releaseUserLock(userId) { RUNNING.delete(userId); }
+
+function passLocalRate(userId, windowMs, limit) {
+  const now = Date.now();
+  const b = inMemoryBuckets.get(userId) || { ts: [] };
+  b.ts = b.ts.filter(t => now - t < windowMs);
+  if (b.ts.length >= limit) return false;
+  b.ts.push(now);
+  inMemoryBuckets.set(userId, b);
+  return true;
+}
+
+// Настройки лимитов (можно подкрутить без перезаливки логики)
+const SEC_LIMIT  = 2;    // не больше 5 спинов в секунду
+const MIN_LIMIT  = 50;  // и не больше 120 спинов в минуту
+
 /**
  * POST /api/case/spin    🔐 JWT
  * body: { case_id: uuid, pay_with: 'tickets'|'stars'|'free', idempotency_key?: uuid }
@@ -49,6 +76,41 @@ export const spinCase = async (req, res) => {
       .eq("telegram_id", telegram_id)
       .single();
     if (userErr || !user) return res.status(404).json({ error: "Пользователь не найден" });
+
+    /* ---------- Antispam: лок + rate limits (не ломает текущую архитектуру) ---------- */
+    await acquireUserLock(user.id);
+    try {
+      // Локальные лимиты (в памяти) — мгновенная отсечка
+      if (!passLocalRate(user.id, 1000, SEC_LIMIT))
+        return res.status(429).json({ error: "Too many spins per second" });
+
+      if (!passLocalRate(user.id, 60_000, MIN_LIMIT))
+        return res.status(429).json({ error: "Too many spins per minute" });
+
+      // Страховка: проверка по БД (если несколько инстансов сервера)
+      const iso1s = new Date(Date.now() - 1000).toISOString();
+      const { data: recent1s } = await supabase
+        .from("case_spins")
+        .select("id")
+        .eq("user_id", user.id)
+        .gt("created_at", iso1s)
+        .limit(SEC_LIMIT + 1);
+      if ((recent1s?.length || 0) >= SEC_LIMIT)
+        return res.status(429).json({ error: "Too many spins per second (db)" });
+
+      const iso1m = new Date(Date.now() - 60_000).toISOString();
+      const { data: recent1m } = await supabase
+        .from("case_spins")
+        .select("id")
+        .eq("user_id", user.id)
+        .gt("created_at", iso1m)
+        .limit(MIN_LIMIT + 1);
+      if ((recent1m?.length || 0) >= MIN_LIMIT)
+        return res.status(429).json({ error: "Too many spins per minute (db)" });
+    } finally {
+      releaseUserLock(user.id);
+    }
+    /* ------------------------------------------------------------------------------- */
 
     // Бесплатный спин — только для самого дешёвого активного кейса
     let cheapestCaseId = null;
