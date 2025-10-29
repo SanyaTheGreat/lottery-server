@@ -1,14 +1,15 @@
 import { supabase } from "../../services/supabaseClient.js";
 
 /**
- * POST /api/cases   🔐 JWT
- * Создать кейс. Сейчас просто требуем авторизованного пользователя.
- * (Если есть роль админа — добавь проверку внутри по req.user.telegram_id.)
+ * POST /api/cases
+ * Создать кейс. Требует заголовок x-gem-key.
  */
 export const createCase = async (req, res) => {
   try {
-    const telegram_id = req.user?.telegram_id; // ← приходит из requireJwt()
-    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+    // 🔐 Проверка x-gem-key (ключ хранится в Render как GEM_KEY)
+    if (req.headers["x-gem-key"] !== process.env.GEM_KEY) {
+      return res.status(401).json({ error: "Invalid x-gem-key" });
+    }
 
     const { name, price, is_active = true, allow_stars = true } = req.body || {};
     if (!name || price === undefined) {
@@ -34,7 +35,6 @@ export const createCase = async (req, res) => {
  */
 export const getCases = async (_req, res) => {
   try {
-    // курс для пересчёта TON → Stars
     const { data: rateRow, error: rateErr } = await supabase
       .from("fx_rates")
       .select("stars_per_ton")
@@ -42,7 +42,9 @@ export const getCases = async (_req, res) => {
       .single();
 
     if (rateErr || !rateRow) {
-      return res.status(500).json({ error: "Не удалось получить курс stars_per_ton" });
+      return res
+        .status(500)
+        .json({ error: "Не удалось получить курс stars_per_ton" });
     }
 
     const starsPerTon = Number(rateRow.stars_per_ton);

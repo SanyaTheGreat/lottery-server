@@ -3,6 +3,11 @@ import { supabase } from "../../services/supabaseClient.js";
 // POST /api/cases/:case_id/chance
 export const addCaseChance = async (req, res) => {
   try {
+    // 🔐 Проверка x-gem-key (ключ хранится в Render как GEM_KEY)
+    if (req.headers["x-gem-key"] !== process.env.GEM_KEY) {
+      return res.status(401).json({ error: "Invalid x-gem-key" });
+    }
+
     const { case_id } = req.params;
     const {
       nft_name,
@@ -17,7 +22,14 @@ export const addCaseChance = async (req, res) => {
       is_active = true,
     } = req.body;
 
-    if (!case_id || !slug || !nft_name || weight === undefined || price === undefined || payout_value === undefined) {
+    if (
+      !case_id ||
+      !slug ||
+      !nft_name ||
+      weight === undefined ||
+      price === undefined ||
+      payout_value === undefined
+    ) {
       return res.status(400).json({
         error: "case_id, nft_name, slug, weight, price, payout_value обязательны",
       });
@@ -57,7 +69,9 @@ export const getCaseChance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("case_chance")
-      .select("id, nft_name, percent, slug, weight, price, payout_value,  chance, payout_stars, quantity, is_active")
+      .select(
+        "id, nft_name, percent, slug, weight, price, payout_value, chance, payout_stars, quantity, is_active"
+      )
       .eq("case_id", case_id)
       .order("nft_name", { ascending: true });
 
