@@ -62,34 +62,45 @@ app.post('/auth/telegram', async (req, res) => {
 
     const u = v.user;
 
-    // 🆕 Получаем возможного реферала из query
-    const ref = req.query?.ref;
-    let referred_by = null;
+    // 🔹 нормализуем рефку и отсекаем самореферал
+    const refRaw = req.query?.ref;
+    const refNum = refRaw ? Number(refRaw) : null;
+    const isSelfRef = refNum && refNum === Number(u.id);
 
-    // 🆕 Проверяем, существует ли пользователь
-    const { data: existing } = await supabase
+    // 🔹 проверяем, существует ли пользователь (читаем referred_by)
+    const { data: existing, error: existingErr } = await supabase
       .from('users')
-      .select('id, telegram_id')
+      .select('id, telegram_id, referred_by')
       .eq('telegram_id', Number(u.id))
       .maybeSingle();
 
-    // 🆕 Если новый пользователь и есть рефка — ищем реферера
-    if (!existing && ref) {
-      const { data: refUser } = await supabase
-        .from('users')
-        .select('id')
-        .eq('telegram_id', ref)
-        .maybeSingle();
-      if (refUser) referred_by = refUser.id; // записываем UUID реферера
+    if (existingErr) {
+      console.error('❌ existing check error:', existingErr.message);
+      return res.status(500).json({ ok: false, error: 'Database check failed' });
     }
 
-    // 🆕 Формируем payload
+    // 🔹 если новый пользователь и есть валидная рефка — найдём реферера по telegram_id
+    let referred_by = null;
+    if (!existing && refNum && !isSelfRef) {
+      const { data: refUser, error: refErr } = await supabase
+        .from('users')
+        .select('id')
+        .eq('telegram_id', refNum)
+        .maybeSingle();
+      if (refErr) {
+        console.error('❌ ref lookup error:', refErr.message);
+      } else if (refUser) {
+        referred_by = refUser.id; // UUID реферера
+      }
+    }
+
+    // 🔹 формируем payload (реферал только при первом создании)
     const payload = {
       telegram_id: Number(u.id),
       username: u.username ?? null,
       avatar_url: u.photo_url ?? null,
       updated_at: new Date().toISOString(),
-      ...(referred_by && { referred_by }), // добавляем если нашли
+      ...(referred_by && { referred_by }),
     };
 
     // upsert пользователя
@@ -104,14 +115,42 @@ app.post('/auth/telegram', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'Insert/update failed' });
     }
 
+    // 🔹 доп. шаг: если пользователь существовал, у него пустой referred_by и есть валидная рефка — допишем один раз
+    if (existing && !existing.referred_by && refNum && !isSelfRef) {
+      const { data: refUser2, error: refErr2 } = await supabase
+        .from('users')
+        .select('id')
+        .eq('telegram_id', refNum)
+        .maybeSingle();
+
+      if (refErr2) {
+        console.error('❌ ref lookup2 error:', refErr2.message);
+      } else if (refUser2) {
+        const { error: updErr } = await supabase
+          .from('users')
+          .update({ referred_by: refUser2.id })
+          .eq('telegram_id', Number(u.id))
+          .is('referred_by', null); // важный гард — не перезаписывать
+
+        if (updErr) {
+          console.error('❌ attach referral update error:', updErr.message);
+        }
+      }
+    }
+
     // JWT
     const token = jwt.sign(
-      { telegram_id: payload.telegram_id, username: payload.username },
+      { telegram_id: Number(u.id), username: u.username ?? null },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    console.log(`✅ User ${payload.username || payload.telegram_id} авторизован${referred_by ? ` (ref from ${ref})` : ''}`);
+    console.log(
+      `✅ User ${u.username || u.id} авторизован` +
+      (referred_by ? ` (ref from ${refNum})` : '') +
+      (existing && !existing.referred_by && refNum && !isSelfRef ? ' [+attempt attach existing]' : '')
+    );
+
     return res.json({ ok: true, token, user: data });
   } catch (err) {
     console.error("❌ Ошибка /auth/telegram:", err);
