@@ -42,7 +42,7 @@ app.use(cors({
     'https://t.me'
   ],
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-gem-key'], // ✅ добавлено GEM_KEY
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-gem-key'],
   credentials: true,
 }));
 
@@ -62,13 +62,37 @@ app.post('/auth/telegram', async (req, res) => {
 
     const u = v.user;
 
+    // 🆕 Получаем возможного реферала из query
+    const ref = req.query?.ref;
+    let referred_by = null;
+
+    // 🆕 Проверяем, существует ли пользователь
+    const { data: existing } = await supabase
+      .from('users')
+      .select('id, telegram_id')
+      .eq('telegram_id', Number(u.id))
+      .maybeSingle();
+
+    // 🆕 Если новый пользователь и есть рефка — ищем реферера
+    if (!existing && ref) {
+      const { data: refUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('telegram_id', ref)
+        .maybeSingle();
+      if (refUser) referred_by = refUser.id; // записываем UUID реферера
+    }
+
+    // 🆕 Формируем payload
     const payload = {
       telegram_id: Number(u.id),
       username: u.username ?? null,
       avatar_url: u.photo_url ?? null,
       updated_at: new Date().toISOString(),
+      ...(referred_by && { referred_by }), // добавляем если нашли
     };
 
+    // upsert пользователя
     const { data, error } = await supabase
       .from('users')
       .upsert(payload, { onConflict: 'telegram_id' })
@@ -80,13 +104,14 @@ app.post('/auth/telegram', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'Insert/update failed' });
     }
 
+    // JWT
     const token = jwt.sign(
       { telegram_id: payload.telegram_id, username: payload.username },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    console.log(`✅ User ${payload.username || payload.telegram_id} авторизован`);
+    console.log(`✅ User ${payload.username || payload.telegram_id} авторизован${referred_by ? ` (ref from ${ref})` : ''}`);
     return res.json({ ok: true, token, user: data });
   } catch (err) {
     console.error("❌ Ошибка /auth/telegram:", err);
