@@ -19,7 +19,6 @@ function makeTonPayloadFromTgId(telegram_id) {
  */
 const addUser = async (req, res) => {
   try {
-    // 🔐 пользователь только из JWT
     const tgId = req.user?.telegram_id;
     const usernameFromToken = req.user?.username || '';
     const avatarUrlFromToken = req.user?.photo_url || null;
@@ -40,11 +39,20 @@ const addUser = async (req, res) => {
       return res.status(500).json({ error: 'Database check failed' });
     }
 
-    // Если юзер уже есть — мягкое обновление username/avatar
+    // === Если пользователь уже есть ===
     if (existingUser) {
       const patch = {};
-      if (usernameFromToken && usernameFromToken !== existingUser.username) patch.username = usernameFromToken;
-      if (avatarUrlFromToken && avatarUrlFromToken !== existingUser.avatar_url) patch.avatar_url = avatarUrlFromToken;
+
+      // если username/avatar изменились
+      if (usernameFromToken && usernameFromToken !== existingUser.username)
+        patch.username = usernameFromToken;
+      if (avatarUrlFromToken && avatarUrlFromToken !== existingUser.avatar_url)
+        patch.avatar_url = avatarUrlFromToken;
+
+      // 🧩 если payload отсутствует — сгенерировать
+      if (!existingUser.payload) {
+        patch.payload = makeTonPayloadFromTgId(tgId);
+      }
 
       if (Object.keys(patch).length) {
         const { data: updated, error: updateError } = await supabase
@@ -72,10 +80,10 @@ const addUser = async (req, res) => {
       });
     }
 
-    // 🧩 Новый пользователь — генерим payload
+    // === Новый пользователь ===
     const payload = makeTonPayloadFromTgId(tgId);
 
-    // Реферал — однократно, если ?ref валиден и не равен tgId
+    // Реферал — однократно
     let referred_by = null;
     const ref = req.query?.ref ?? req.query?.referrer;
     if (ref && String(ref) !== String(tgId)) {
