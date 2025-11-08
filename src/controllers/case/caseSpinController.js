@@ -2,10 +2,11 @@ import { supabase } from "../../services/supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
 /* =======================
-   Anti-spam HOTFIX (drop-in)
+   Anti-spam HOTFIX (drop-in) + Dedupe
    ======================= */
 const inMemoryBuckets = new Map(); // userId -> {ts:number[]}
 const RUNNING = new Set();         // per-user mutex
+const recentActions = new Map();   // key -> expiry timestamp
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function acquireUserLock(userId) {
@@ -24,9 +25,20 @@ function passLocalRate(userId, windowMs, limit) {
   return true;
 }
 
+// простая защита от двойного клика / повторной отправки
+const DEDUPE_WINDOW = 3000; // 3 секунды
+function dedupeOnce(key) {
+  const now = Date.now();
+  const exp = recentActions.get(key);
+  if (exp && exp > now) return false;
+  recentActions.set(key, now + DEDUPE_WINDOW);
+  setTimeout(() => recentActions.delete(key), DEDUPE_WINDOW + 1000);
+  return true;
+}
+
 // Настройки лимитов (можно подкрутить без перезаливки логики)
-const SEC_LIMIT  = 2;    // не больше 5 спинов в секунду
-const MIN_LIMIT  = 50;  // и не больше 120 спинов в минуту
+const SEC_LIMIT  = 2;   // не больше 2 спинов в секунду
+const MIN_LIMIT  = 50;  // и не больше 50 спинов в минуту
 
 /**
  * POST /api/case/spin    🔐 JWT
@@ -37,6 +49,11 @@ export const spinCase = async (req, res) => {
   try {
     const telegram_id = req.user?.telegram_id;           // ← из JWT
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+
+    // 🔐 анти-дубль на пользователя
+    if (!dedupeOnce(`spin:${telegram_id}`)) {
+      return res.status(409).json({ error: "Операция уже выполняется" });
+    }
 
     const { case_id, pay_with = "tickets", idempotency_key } = req.body || {};
     if (!case_id) return res.status(400).json({ error: "case_id обязателен" });
@@ -353,100 +370,111 @@ export const rerollPrize = async (req, res) => {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
 
-    const { id } = req.params;
-
-    const { data: spin, error: spinErr } = await supabase
-      .from("case_spins")
-      .select("id, user_id, chance_id, status, pay_with")
-      .eq("id", id)
-      .single();
-    if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
-    if (spin.status !== "pending") {
-      return res.status(409).json({ error: "invalid state (ожидается pending)" });
-    }
-    if (!spin.chance_id) {
-      return res.status(409).json({ error: "nothing to reroll (lose)" });
+    // 🔐 анти-дубль
+    if (!dedupeOnce(`reroll:${telegram_id}`)) {
+      return res.status(409).json({ error: "Операция уже выполняется" });
     }
 
-    // авторизованный пользователь должен совпадать с владельцем спина
-    const { data: owner } = await supabase
-      .from("users")
-      .select("telegram_id")
-      .eq("id", spin.user_id)
-      .single();
-    if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+    // 🔒 лок на пользователя
+    await acquireUserLock(telegram_id);
+    try {
+      const { id } = req.params;
 
-    const payWith = spin.pay_with === "stars" ? "stars" : "tickets";
-
-    const { data: chance, error: chErr } = await supabase
-      .from("case_chance")
-      .select("id, payout_value, payout_stars")
-      .eq("id", spin.chance_id)
-      .single();
-    if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
-
-    const { data: user, error: userErr } = await supabase
-      .from("users")
-      .select("id, stars, tickets")
-      .eq("id", spin.user_id)
-      .single();
-    if (userErr || !user) return res.status(404).json({ error: "user not found" });
-
-    let reroll_amount_stars = null;
-    let reroll_amount_tickets = null;
-
-    if (payWith === "stars") {
-      if (Number(chance.payout_stars) > 0) {
-        reroll_amount_stars = Number(chance.payout_stars);
-      } else {
-        const { data: rateRow, error: rateErr } = await supabase
-          .from("fx_rates")
-          .select("stars_per_ton")
-          .eq("id", 1)
-          .single();
-        if (rateErr || !rateRow) return res.status(500).json({ error: "Не задан курс stars_per_ton" });
-        const starsPerTon = Number(rateRow.stars_per_ton || 0);
-        reroll_amount_stars = Math.max(0, Math.ceil((Number(chance.payout_value) || 0) * starsPerTon));
+      const { data: spin, error: spinErr } = await supabase
+        .from("case_spins")
+        .select("id, user_id, chance_id, status, pay_with")
+        .eq("id", id)
+        .single();
+      if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
+      if (spin.status !== "pending") {
+        return res.status(409).json({ error: "invalid state (ожидается pending)" });
+      }
+      if (!spin.chance_id) {
+        return res.status(409).json({ error: "nothing to reroll (lose)" });
       }
 
-      const { error: updErr } = await supabase
+      // авторизованный пользователь должен совпадать с владельцем спина
+      const { data: owner } = await supabase
         .from("users")
-        .update({ stars: Number(user.stars || 0) + reroll_amount_stars })
-        .eq("id", user.id);
-      if (updErr) return res.status(500).json({ error: updErr.message });
+        .select("telegram_id")
+        .eq("id", spin.user_id)
+        .single();
+      if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
 
-    } else {
-      reroll_amount_tickets = Number(chance.payout_value) || 0;
+      const payWith = spin.pay_with === "stars" ? "stars" : "tickets";
 
-      const { error: updErr } = await supabase
+      const { data: chance, error: chErr } = await supabase
+        .from("case_chance")
+        .select("id, payout_value, payout_stars")
+        .eq("id", spin.chance_id)
+        .single();
+      if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
+
+      const { data: user, error: userErr } = await supabase
         .from("users")
-        .update({ tickets: Number(user.tickets || 0) + reroll_amount_tickets })
-        .eq("id", user.id);
-      if (updErr) return res.status(500).json({ error: updErr.message });
-    }
+        .select("id, stars, tickets")
+        .eq("id", spin.user_id)
+        .single();
+      if (userErr || !user) return res.status(404).json({ error: "user not found" });
 
-    const { error: updSpinErr } = await supabase
-      .from("case_spins")
-      .update({
+      let reroll_amount_stars = null;
+      let reroll_amount_tickets = null;
+
+      if (payWith === "stars") {
+        if (Number(chance.payout_stars) > 0) {
+          reroll_amount_stars = Number(chance.payout_stars);
+        } else {
+          const { data: rateRow, error: rateErr } = await supabase
+            .from("fx_rates")
+            .select("stars_per_ton")
+            .eq("id", 1)
+            .single();
+          if (rateErr || !rateRow) return res.status(500).json({ error: "Не задан курс stars_per_ton" });
+          const starsPerTon = Number(rateRow.stars_per_ton || 0);
+          reroll_amount_stars = Math.max(0, Math.ceil((Number(chance.payout_value) || 0) * starsPerTon));
+        }
+
+        const { error: updErr } = await supabase
+          .from("users")
+          .update({ stars: Number(user.stars || 0) + reroll_amount_stars })
+          .eq("id", user.id);
+        if (updErr) return res.status(500).json({ error: updErr.message });
+
+      } else {
+        reroll_amount_tickets = Number(chance.payout_value) || 0;
+
+        const { error: updErr } = await supabase
+          .from("users")
+          .update({ tickets: Number(user.tickets || 0) + reroll_amount_tickets })
+          .eq("id", user.id);
+        if (updErr) return res.status(500).json({ error: updErr.message });
+      }
+
+      const { error: updSpinErr } = await supabase
+        .from("case_spins")
+        .update({
+          status: "reroll",
+          reroll_amount: reroll_amount_tickets ?? null
+        })
+        .eq("id", spin.id);
+      if (updSpinErr) return res.status(500).json({ error: updSpinErr.message });
+
+      const message = payWith === "stars"
+        ? `Обменять этот подарок на ${reroll_amount_stars} ⭐?`
+        : `Обменять этот подарок на ${reroll_amount_tickets} TON?`;
+
+      return res.json({
         status: "reroll",
-        reroll_amount: reroll_amount_tickets ?? null
-      })
-      .eq("id", spin.id);
-    if (updSpinErr) return res.status(500).json({ error: updSpinErr.message });
-
-    const message = payWith === "stars"
-      ? `Обменять этот подарок на ${reroll_amount_stars} ⭐?`
-      : `Обменять этот подарок на ${reroll_amount_tickets} TON?`;
-
-    return res.json({
-      status: "reroll",
-      pay_with: payWith,
-      reroll_amount_stars,
-      reroll_amount_tickets,
-      message
-    });
+        pay_with: payWith,
+        reroll_amount_stars,
+        reroll_amount_tickets,
+        message
+      });
+    } finally {
+      releaseUserLock(telegram_id);
+    }
   } catch {
     return res.status(500).json({ error: "rerollPrize failed" });
   }
@@ -461,165 +489,176 @@ export const claimPrize = async (req, res) => {
     const telegram_id = req.user?.telegram_id;
     if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
 
-    const { id } = req.params;
-
-    const { data: spin, error: spinErr } = await supabase
-      .from("case_spins")
-      .select("id, user_id, chance_id, status")
-      .eq("id", id)
-      .single();
-    if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
-    if (spin.status !== "pending") {
-      return res.status(409).json({ error: "invalid state (ожидается pending)" });
-    }
-    if (!spin.chance_id) {
-      return res.status(409).json({ error: "nothing to claim (lose)" });
+    // 🔐 анти-дубль
+    if (!dedupeOnce(`claim:${telegram_id}`)) {
+      return res.status(409).json({ error: "Операция уже выполняется" });
     }
 
-    // авторизованный пользователь должен совпадать с владельцем спина
-    const { data: owner } = await supabase
-      .from("users")
-      .select("telegram_id")
-      .eq("id", spin.user_id)
-      .single();
-    if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+    // 🔒 лок на пользователя
+    await acquireUserLock(telegram_id);
+    try {
+      const { id } = req.params;
 
-    // 👉 Тянем claim_price
-    const { data: chance, error: chErr } = await supabase
-      .from("case_chance")
-      .select("id, nft_name, quantity, claim_price")
-      .eq("id", spin.chance_id)
-      .single();
-    if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
-    if (Number(chance.quantity) <= 0) {
-      return res.status(409).json({ error: "out of stock" });
-    }
+      const { data: spin, error: spinErr } = await supabase
+        .from("case_spins")
+        .select("id, user_id, chance_id, status")
+        .eq("id", id)
+        .single();
+      if (spinErr || !spin) return res.status(404).json({ error: "spin not found" });
+      if (spin.status !== "pending") {
+        return res.status(409).json({ error: "invalid state (ожидается pending)" });
+      }
+      if (!spin.chance_id) {
+        return res.status(409).json({ error: "nothing to claim (lose)" });
+      }
 
-    const name = String(chance.nft_name || "").trim().toLowerCase();
-    const looksLikeStars =
-      name.includes("звезд") || name.includes("звезды") || name.includes("звезда") ||
-      name.includes("star") || name.includes("⭐");
-    let starsPrize = 0;
-    if (looksLikeStars) {
-      const matchNum = name.match(/(\d+)/);
-      if (matchNum) starsPrize = Number(matchNum[1]);
-    }
-
-    // ⭐ Призы-звёзды — без оплаты claim_price
-    if (starsPrize > 0) {
-      const { data: user, error: userErr } = await supabase
+      // авторизованный пользователь должен совпадать с владельцем спина
+      const { data: owner } = await supabase
         .from("users")
-        .select("id, stars")
+        .select("telegram_id")
         .eq("id", spin.user_id)
         .single();
-      if (userErr || !user) return res.status(404).json({ error: "user not found" });
+      if (!owner || String(owner.telegram_id) !== String(telegram_id)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
 
-      const { error: addErr } = await supabase
-        .from("users")
-        .update({ stars: Number(user.stars || 0) + starsPrize })
-        .eq("id", user.id);
-      if (addErr) return res.status(500).json({ error: addErr.message });
+      // 👉 Тянем claim_price
+      const { data: chance, error: chErr } = await supabase
+        .from("case_chance")
+        .select("id, nft_name, quantity, claim_price")
+        .eq("id", spin.chance_id)
+        .single();
+      if (chErr || !chance) return res.status(404).json({ error: "chance not found" });
+      if (Number(chance.quantity) <= 0) {
+        return res.status(409).json({ error: "out of stock" });
+      }
 
-      const { error: decErr1 } = await supabase
+      const name = String(chance.nft_name || "").trim().toLowerCase();
+      const looksLikeStars =
+        name.includes("звезд") || name.includes("звезды") || name.includes("звезда") ||
+        name.includes("star") || name.includes("⭐");
+      let starsPrize = 0;
+      if (looksLikeStars) {
+        const matchNum = name.match(/(\d+)/);
+        if (matchNum) starsPrize = Number(matchNum[1]);
+      }
+
+      // ⭐ Призы-звёзды — без оплаты claim_price
+      if (starsPrize > 0) {
+        const { data: user, error: userErr } = await supabase
+          .from("users")
+          .select("id, stars")
+          .eq("id", spin.user_id)
+          .single();
+        if (userErr || !user) return res.status(404).json({ error: "user not found" });
+
+        const { error: addErr } = await supabase
+          .from("users")
+          .update({ stars: Number(user.stars || 0) + starsPrize })
+          .eq("id", user.id);
+        if (addErr) return res.status(500).json({ error: addErr.message });
+
+        const { error: decErr1 } = await supabase
+          .from("case_chance")
+          .update({ quantity: Number(chance.quantity) - 1 })
+          .eq("id", chance.id);
+        if (decErr1) return res.status(500).json({ error: decErr1.message });
+
+        const { error: updErr1 } = await supabase
+          .from("case_spins")
+          .update({ status: "reward_sent" })
+          .eq("id", spin.id);
+        if (updErr1) return res.status(500).json({ error: updErr1.message });
+
+        return res.json({ status: "reward_sent" });
+      }
+
+      // 💰 Если задана цена клейма (например, 25⭐) — списываем перед выдачей
+      const claimPrice = Number(chance.claim_price || 0);
+      if (claimPrice === 25) {
+        const { data: claimUser, error: uErr } = await supabase
+          .from("users")
+          .select("id, stars")
+          .eq("id", spin.user_id)
+          .single();
+        if (uErr || !claimUser) return res.status(404).json({ error: "user not found" });
+
+        if (Number(claimUser.stars || 0) < claimPrice) {
+          return res.status(402).json({ error: "Недостаточно звёзд для вывода (нужно 25⭐)" });
+        }
+
+        const { error: debErr } = await supabase
+          .from("users")
+          .update({ stars: Number(claimUser.stars) - claimPrice })
+          .eq("id", claimUser.id);
+        if (debErr) return res.status(500).json({ error: debErr.message });
+
+        try {
+          await supabase.from("stars_ledger").insert([{
+            user_id: claimUser.id,
+            change: -claimPrice,
+            reason: "claim_fee",
+            spin_id: id
+          }]);
+        } catch { /* audit best-effort */ }
+      }
+
+      // берём подготовленный подарочный код/ссылку
+      const { data: availableGifts, error: giftErr } = await supabase
+        .from("gifts_for_cases")
+        .select("pending_id, nft_number, msg_id, nft_name, transfer_stars, link, is_infinite, used")
+        .eq("nft_name", chance.nft_name)
+        .eq("used", false)
+        .limit(50);
+      if (giftErr || !availableGifts?.length) {
+        return res.status(409).json({ error: "no available gift" });
+      }
+      const gift = availableGifts[Math.floor(Math.random() * availableGifts.length)];
+
+      if (!gift.is_infinite) {
+        const { error: markErr } = await supabase
+          .from("gifts_for_cases")
+          .update({ used: true })
+          .eq("pending_id", gift.pending_id);
+        if (markErr) return res.status(500).json({ error: markErr.message });
+      }
+
+      const { error: decErr } = await supabase
         .from("case_chance")
         .update({ quantity: Number(chance.quantity) - 1 })
         .eq("id", chance.id);
-      if (decErr1) return res.status(500).json({ error: decErr1.message });
+      if (decErr) return res.status(500).json({ error: decErr.message });
 
-      const { error: updErr1 } = await supabase
+      const { data: winUser } = await supabase
+        .from("users")
+        .select("telegram_id, username")
+        .eq("id", spin.user_id)
+        .single();
+
+      const { error: prErr } = await supabase.from("pending_rewards").insert([{
+        source: "case",
+        spin_id: spin.id,
+        winner_id: spin.user_id,
+        telegram_id: winUser?.telegram_id ?? null,
+        username: winUser?.username ?? null,
+        nft_name: gift.nft_name,
+        nft_number: gift.nft_number,
+        msg_id: gift.msg_id,
+        status: "pending",
+        created_at: new Date().toISOString().slice(11, 19)
+      }]);
+      if (prErr) return res.status(500).json({ error: prErr.message });
+
+      const { error: updErr } = await supabase
         .from("case_spins")
         .update({ status: "reward_sent" })
         .eq("id", spin.id);
-      if (updErr1) return res.status(500).json({ error: updErr1.message });
+      if (updErr) return res.status(500).json({ error: updErr.message });
 
       return res.json({ status: "reward_sent" });
+    } finally {
+      releaseUserLock(telegram_id);
     }
-
-    // 💰 Если задана цена клейма (например, 25⭐) — списываем перед выдачей
-    const claimPrice = Number(chance.claim_price || 0);
-    if (claimPrice === 25) {
-      const { data: claimUser, error: uErr } = await supabase
-        .from("users")
-        .select("id, stars")
-        .eq("id", spin.user_id)
-        .single();
-      if (uErr || !claimUser) return res.status(404).json({ error: "user not found" });
-
-      if (Number(claimUser.stars || 0) < claimPrice) {
-        return res.status(402).json({ error: "Недостаточно звёзд для вывода (нужно 25⭐)" });
-      }
-
-      const { error: debErr } = await supabase
-        .from("users")
-        .update({ stars: Number(claimUser.stars) - claimPrice })
-        .eq("id", claimUser.id);
-      if (debErr) return res.status(500).json({ error: debErr.message });
-
-      try {
-        await supabase.from("stars_ledger").insert([{
-          user_id: claimUser.id,
-          change: -claimPrice,
-          reason: "claim_fee",
-          spin_id: id
-        }]);
-      } catch { /* audit best-effort */ }
-    }
-
-    // берём подготовленный подарочный код/ссылку
-    const { data: availableGifts, error: giftErr } = await supabase
-      .from("gifts_for_cases")
-      .select("pending_id, nft_number, msg_id, nft_name, transfer_stars, link, is_infinite, used")
-      .eq("nft_name", chance.nft_name)
-      .eq("used", false)
-      .limit(50);
-    if (giftErr || !availableGifts?.length) {
-      return res.status(409).json({ error: "no available gift" });
-    }
-    const gift = availableGifts[Math.floor(Math.random() * availableGifts.length)];
-
-    if (!gift.is_infinite) {
-      const { error: markErr } = await supabase
-        .from("gifts_for_cases")
-        .update({ used: true })
-        .eq("pending_id", gift.pending_id);
-      if (markErr) return res.status(500).json({ error: markErr.message });
-    }
-
-    const { error: decErr } = await supabase
-      .from("case_chance")
-      .update({ quantity: Number(chance.quantity) - 1 })
-      .eq("id", chance.id);
-    if (decErr) return res.status(500).json({ error: decErr.message });
-
-    const { data: winUser } = await supabase
-      .from("users")
-      .select("telegram_id, username")
-      .eq("id", spin.user_id)
-      .single();
-
-    const { error: prErr } = await supabase.from("pending_rewards").insert([{
-      source: "case",
-      spin_id: spin.id,
-      winner_id: spin.user_id,
-      telegram_id: winUser?.telegram_id ?? null,
-      username: winUser?.username ?? null,
-      nft_name: gift.nft_name,
-      nft_number: gift.nft_number,
-      msg_id: gift.msg_id,
-      status: "pending",
-      created_at: new Date().toISOString().slice(11, 19)
-    }]);
-    if (prErr) return res.status(500).json({ error: prErr.message });
-
-    const { error: updErr } = await supabase
-      .from("case_spins")
-      .update({ status: "reward_sent" })
-      .eq("id", spin.id);
-    if (updErr) return res.status(500).json({ error: updErr.message });
-
-    return res.json({ status: "reward_sent" });
   } catch {
     return res.status(500).json({ error: "claimPrize failed" });
   }

@@ -10,12 +10,12 @@ API_HASH = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 SESSION_NAME = "updategifts_v3"  # новое имя сессии, можно менять
 
 # username БЕЗ @ (или числовой id)
-SOURCE_PEER = "giftrelayer"
+SOURCE_PEER = "myusernameSasha"
 
 # ── Supabase ────────────────────────────────────────────────────
 SUPABASE_URL = "https://djpcftyqkwucbksknsdu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGNmdHlxa3d1Y2Jrc2tuc2R1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NDY3MTg4MiwiZXhwIjoyMDYwMjQ3ODgyfQ.oSMAenP7WqL19Fl8fhwx7WfwKMG4us-KQ6d_XbpIJSw"
-TABLE_NAME = "gifts_for_cases"
+TABLE_NAME = "slot_gifts"
 
 # ── Paths ───────────────────────────────────────────────────────
 ANIMATIONS_DIR = "C:/Users/PC/Desktop/frontend/fronted-server/public/animations"
