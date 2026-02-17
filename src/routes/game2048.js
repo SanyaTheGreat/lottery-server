@@ -47,11 +47,14 @@ function computePeriodBoundsUTC(now = new Date()) {
   return { startAt, freezeAt, endAt };
 }
 
+/**
+ * FIX: crypto.randomInt() имеет лимит по диапазону.
+ * Генерим seed через randomBytes (64-bit), возвращаем строкой под bigint в БД.
+ */
 function randomSeedBigintString() {
-  // < 2^53 чтобы не ломаться в JS, но в БД bigint ок.
-  const max = 9_000_000_000_000_000; // 9e15 ~ около 2^53
-  const n = crypto.randomInt(1, max);
-  return String(n);
+  const buf = crypto.randomBytes(8); // 64-bit
+  const n = buf.readBigUInt64BE(0);  // BigInt
+  return n.toString();
 }
 
 /**
