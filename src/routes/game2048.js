@@ -36,7 +36,9 @@ function computePeriodBoundsUTC(now = new Date()) {
   sunday.setUTCDate(sunday.getUTCDate() + daysToSunday);
 
   // конец: воскресенье 21:00 UTC
-  const endAt = new Date(Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 21, 0, 0, 0));
+  const endAt = new Date(
+    Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 21, 0, 0, 0)
+  );
 
   // если уже после 21:00 в воскресенье — переносим на след. воскресенье
   if (now >= endAt) endAt.setUTCDate(endAt.getUTCDate() + 7);
@@ -53,7 +55,7 @@ function computePeriodBoundsUTC(now = new Date()) {
  */
 function randomSeedBigintString() {
   const buf = crypto.randomBytes(8); // 64-bit
-  const n = buf.readBigUInt64BE(0);  // BigInt
+  const n = buf.readBigUInt64BE(0); // BigInt
   return n.toString();
 }
 
@@ -307,6 +309,97 @@ router.post("/run/start", async (req, res) => {
     });
   } catch (e) {
     console.error("[2048/start] unexpected:", e);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+/**
+ * POST /game/run/move
+ * Body: { dir: "up" | "down" | "left" | "right" }
+ * Заглушка: просто пишет действие в actions (jsonb массив), не меняет score/поле.
+ */
+router.post("/run/move", async (req, res) => {
+  const tgId = getTelegramId(req);
+  if (!tgId) return res.status(401).json({ ok: false, error: "Unauthorized" });
+
+  const dirRaw = req?.body?.dir;
+  const dir = typeof dirRaw === "string" ? dirRaw.toLowerCase() : "";
+  const allowed = new Set(["up", "down", "left", "right"]);
+
+  if (!allowed.has(dir)) {
+    return res.status(400).json({ ok: false, error: "Invalid dir. Use up/down/left/right" });
+  }
+
+  try {
+    console.log(`[2048/move] tg=${tgId} dir=${dir}`);
+
+    // user
+    const { data: user, error: uErr } = await supabase
+      .from("users")
+      .select(
+        "id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance"
+      )
+      .eq("telegram_id", tgId)
+      .maybeSingle();
+
+    if (uErr) {
+      console.error("[2048/move] users select error:", uErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (users)" });
+    }
+    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+
+    // active run
+    const { data: activeRuns, error: aErr } = await supabase
+      .from("game_runs")
+      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .eq("user_id", user.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (aErr) {
+      console.error("[2048/move] game_runs select active error:", aErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (active run)" });
+    }
+
+    if (!activeRuns?.length) {
+      return res.status(409).json({ ok: false, error: "No active run. Call /game/run/start first." });
+    }
+
+    const run = activeRuns[0];
+
+    const prevActions = Array.isArray(run.actions) ? run.actions : [];
+    const nextActions = [...prevActions, { t: new Date().toISOString(), dir }];
+
+    const { data: updatedRun, error: upErr } = await supabase
+      .from("game_runs")
+      .update({
+        actions: nextActions,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.id)
+      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .single();
+
+    if (upErr) {
+      console.error("[2048/move] game_runs update error:", upErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (update run)" });
+    }
+
+    return res.json({
+      ok: true,
+      stub: true,
+      move: { dir },
+      run: updatedRun,
+      attempts: {
+        daily_day_utc: user.daily_day_utc,
+        daily_attempts_remaining: user.daily_attempts_remaining,
+        referral_attempts_balance: user.referral_attempts_balance,
+        daily_plays_used: user.daily_plays_used,
+      },
+    });
+  } catch (e) {
+    console.error("[2048/move] unexpected:", e);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
