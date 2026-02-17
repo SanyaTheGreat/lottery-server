@@ -8,20 +8,20 @@ from pyrogram import Client
 from pyrogram.enums import MessageServiceType
 from supabase import create_client, Client as SupabaseClient
 
-# --- Telegram auth (user session, not bot) ---
+# --- Telegram auth () ---
 api_id = 20572626
 api_hash = "e0a03ec5b69ed82bc7344630fdf7ca2a"
 session_name = "storagescan_v2"  # новый файл сессии, можно менять
 
-# Чат-источник подарков (второй аккаунт)
-SECOND_USER_ID = "myusernameSasha"       # можно заменить на username, например "fightforgift"
+# Чат-источник подарков 
+SECOND_USER_ID = "be_like_me"       # можно заменить на username, например "fightforgift"
 
 # --- Supabase ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://djpcftyqkwucbksknsdu.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGNmdHlxa3d1Y2Jrc2tuc2R1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NDY3MTg4MiwiZXhwIjoyMDYwMjQ3ODgyfQ.oSMAenP7WqL19Fl8fhwx7WfwKMG4us-KQ6d_XbpIJSw")
 supabase: SupabaseClient = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-TABLE = "slot_gifts"
+TABLE = "gifts_for_cases"
 SCAN_LIMIT = 1  # сколько сообщений пролистывать
 
 
