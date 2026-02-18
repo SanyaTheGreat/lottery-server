@@ -52,6 +52,9 @@ function randomSeedBigintString() {
 const GRID_SIZE = 4;
 const ACTIONS_LIMIT = 200;
 
+const FINISH_REASONS = new Set(["no_moves", "manual", "period_end"]);
+const LEADERBOARD_TABLE = "game2048_leaderboard"; // <-- если у тебя другое имя таблицы — поменяй тут
+
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
   let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
@@ -76,7 +79,6 @@ function makeRng(seedStr, startIndex = 0) {
       idx += 1n;
       return rand01From64(u);
     },
-    // сколько значений RNG уже использовали
     getIndex() {
       return Number(idx);
     },
@@ -122,7 +124,6 @@ function spawnTile(grid, rng) {
   return true;
 }
 
-// сдвигаем/сливаем одну линию (длина 4), возвращаем новую линию + очки
 function slideAndMergeLine(line) {
   const filtered = line.filter((x) => x !== 0);
   const out = [];
@@ -277,6 +278,129 @@ async function getOrCreateActivePeriod(now) {
 }
 
 /**
+ * Финишит ран и пушит best_score в лидерборд (по period_id+user_id), если score лучше.
+ * reason: "no_moves" | "manual" | "period_end"
+ */
+async function finalizeRun({ run, reason }) {
+  const nowIso = new Date().toISOString();
+  const finalScore = Number(run.current_score ?? 0);
+  const finalMoves = Number(run.moves ?? 0);
+
+  // 1) завершить run (idempotent: если уже finished — просто вернуть как есть)
+  if (run.status !== "finished") {
+    const { data: finished, error: finErr } = await supabase
+      .from("game_runs")
+      .update({
+        status: "finished",
+        finished_reason: reason,
+        finished_at: nowIso,
+        // на всякий: фиксируем финал (если в таблице есть такие колонки — ок, если нет — supabase вернёт ошибку)
+        final_score: finalScore,
+        final_moves: finalMoves,
+        updated_at: nowIso,
+      })
+      .eq("id", run.id)
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
+      )
+      .single();
+
+    if (finErr) {
+      // Если у тебя ещё нет колонок finished_reason/finished_at/final_score/final_moves — будет ошибка.
+      // Тогда просто закрываем минимумом.
+      const msg = String(finErr.message || "");
+      console.error("[2048/finalize] finish update error:", msg);
+
+      const { data: finished2, error: finErr2 } = await supabase
+        .from("game_runs")
+        .update({
+          status: "finished",
+          updated_at: nowIso,
+        })
+        .eq("id", run.id)
+        .select(
+          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        )
+        .single();
+
+      if (finErr2) throw new Error(`finalize minimal update failed: ${finErr2.message}`);
+      run = finished2;
+    } else {
+      run = finished;
+    }
+  }
+
+  // 2) лидерборд: best_score per user per period
+  // Если таблицы ещё нет или имя другое — увидишь ошибку в логах.
+  let bestScore = finalScore;
+
+  const { data: existingLb, error: lbSelErr } = await supabase
+    .from(LEADERBOARD_TABLE)
+    .select("id, best_score")
+    .eq("period_id", run.period_id)
+    .eq("user_id", run.user_id)
+    .maybeSingle();
+
+  if (lbSelErr) {
+    console.error("[2048/finalize] leaderboard select error:", lbSelErr.message);
+    // не ломаем финиш игры из-за лидерборда
+    return { run, leaderboard: null };
+  }
+
+  const currentBest = Number(existingLb?.best_score ?? 0);
+  if (currentBest > bestScore) bestScore = currentBest;
+
+  if (!existingLb) {
+    const { data: lbIns, error: lbInsErr } = await supabase
+      .from(LEADERBOARD_TABLE)
+      .insert({
+        period_id: run.period_id,
+        user_id: run.user_id,
+        best_score: bestScore,
+        created_at: nowIso,
+        updated_at: nowIso,
+      })
+      .select("id, period_id, user_id, best_score, created_at, updated_at")
+      .single();
+
+    if (lbInsErr) {
+      console.error("[2048/finalize] leaderboard insert error:", lbInsErr.message);
+      return { run, leaderboard: null };
+    }
+
+    return { run, leaderboard: lbIns };
+  }
+
+  if (finalScore > currentBest) {
+    const { data: lbUpd, error: lbUpdErr } = await supabase
+      .from(LEADERBOARD_TABLE)
+      .update({
+        best_score: finalScore,
+        updated_at: nowIso,
+      })
+      .eq("id", existingLb.id)
+      .select("id, period_id, user_id, best_score, created_at, updated_at")
+      .single();
+
+    if (lbUpdErr) {
+      console.error("[2048/finalize] leaderboard update error:", lbUpdErr.message);
+      return { run, leaderboard: null };
+    }
+
+    return { run, leaderboard: lbUpd };
+  }
+
+  // score не улучшил best
+  const { data: lbSame } = await supabase
+    .from(LEADERBOARD_TABLE)
+    .select("id, period_id, user_id, best_score, created_at, updated_at")
+    .eq("id", existingLb.id)
+    .maybeSingle();
+
+  return { run, leaderboard: lbSame ?? null };
+}
+
+/**
  * POST /game/run/start
  */
 router.post("/run/start", async (req, res) => {
@@ -347,7 +471,7 @@ router.post("/run/start", async (req, res) => {
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
       .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
       )
       .eq("user_id", user.id)
       .eq("status", "active")
@@ -420,7 +544,7 @@ router.post("/run/start", async (req, res) => {
         updated_at: new Date().toISOString(),
       })
       .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
       )
       .single();
 
@@ -430,7 +554,7 @@ router.post("/run/start", async (req, res) => {
       const { data: fallback } = await supabase
         .from("game_runs")
         .select(
-          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
         )
         .eq("user_id", user.id)
         .eq("status", "active")
@@ -477,9 +601,72 @@ router.post("/run/start", async (req, res) => {
 });
 
 /**
+ * POST /game/run/finish
+ * Body: { reason?: "manual" }
+ * Завершить игру вручную и записать результат в лидерборд (если лучше).
+ */
+router.post("/run/finish", async (req, res) => {
+  const tgId = getTelegramId(req);
+  if (!tgId) return res.status(401).json({ ok: false, error: "Unauthorized" });
+
+  const reasonRaw = req?.body?.reason;
+  const reason = typeof reasonRaw === "string" ? reasonRaw : "manual";
+  const finalReason = FINISH_REASONS.has(reason) ? reason : "manual";
+
+  try {
+    console.log(`[2048/finish] tg=${tgId} reason=${finalReason}`);
+
+    const { data: user, error: uErr } = await supabase
+      .from("users")
+      .select("id, telegram_id")
+      .eq("telegram_id", tgId)
+      .maybeSingle();
+
+    if (uErr) {
+      console.error("[2048/finish] users select error:", uErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (users)" });
+    }
+    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+
+    const { data: activeRuns, error: aErr } = await supabase
+      .from("game_runs")
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
+      )
+      .eq("user_id", user.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (aErr) {
+      console.error("[2048/finish] game_runs select active error:", aErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (active run)" });
+    }
+    if (!activeRuns?.length) {
+      return res.status(409).json({ ok: false, error: "No active run." });
+    }
+
+    const run = activeRuns[0];
+    const out = await finalizeRun({ run, reason: finalReason });
+
+    return res.json({
+      ok: true,
+      finished: true,
+      reason: finalReason,
+      run: out.run,
+      leaderboard: out.leaderboard,
+    });
+  } catch (e) {
+    console.error("[2048/finish] unexpected:", e);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+/**
  * POST /game/run/move
  * Body: { dir: "up" | "down" | "left" | "right" }
  * Реальная 2048-логика: двигаем/сливаем, спавним тайл, сохраняем state/score/moves/rng_index.
+ * Если больше нет ходов — game over -> status=finished + запись в лидерборд.
  */
 router.post("/run/move", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -511,7 +698,7 @@ router.post("/run/move", async (req, res) => {
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
       .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
       )
       .eq("user_id", user.id)
       .eq("status", "active")
@@ -528,6 +715,39 @@ router.post("/run/move", async (req, res) => {
     }
 
     const run = activeRuns[0];
+
+    // защита: если период уже закончился/заморожен — завершаем ран (period_end)
+    try {
+      const { data: period, error: pErr } = await supabase
+        .from("weekly_periods")
+        .select("id, status, freeze_at, end_at")
+        .eq("id", run.period_id)
+        .maybeSingle();
+
+      if (!pErr && period) {
+        const now = new Date();
+        const freezeAt = period.freeze_at ? new Date(period.freeze_at) : null;
+        const endAt = period.end_at ? new Date(period.end_at) : null;
+
+        const shouldForceFinish =
+          (endAt && now >= endAt) || (freezeAt && now >= freezeAt) || period.status === "frozen" || period.status === "closed";
+
+        if (shouldForceFinish) {
+          const out = await finalizeRun({ run, reason: "period_end" });
+          return res.status(423).json({
+            ok: true,
+            finished: true,
+            reason: "period_end",
+            run: out.run,
+            leaderboard: out.leaderboard,
+            error: "Season is frozen/ended. Run finished.",
+          });
+        }
+      }
+    } catch (e) {
+      // если тут что-то пошло не так — не ломаем ход, просто лог
+      console.error("[2048/move] period check error:", e?.message || e);
+    }
 
     let st = normalizeState(run.state);
     let rngIndex = Number(run.rng_index ?? 0);
@@ -561,6 +781,7 @@ router.post("/run/move", async (req, res) => {
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
 
+    // после успешного хода всегда спавним новый тайл
     spawnTile(afterGrid, rng);
 
     const nextScore = score + gained;
@@ -589,13 +810,34 @@ router.post("/run/move", async (req, res) => {
       })
       .eq("id", run.id)
       .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
       )
       .single();
 
     if (upErr) {
       console.error("[2048/move] game_runs update error:", upErr.message);
       return res.status(500).json({ ok: false, error: "DB error (update run)" });
+    }
+
+    // если это game over — финишим и пишем лидерборд
+    if (updatedRun.status === "finished") {
+      const out = await finalizeRun({ run: updatedRun, reason: "no_moves" });
+
+      return res.json({
+        ok: true,
+        moved: true,
+        gained,
+        finished: true,
+        reason: "no_moves",
+        run: out.run,
+        leaderboard: out.leaderboard,
+        attempts: {
+          daily_day_utc: user.daily_day_utc,
+          daily_attempts_remaining: user.daily_attempts_remaining,
+          referral_attempts_balance: user.referral_attempts_balance,
+          daily_plays_used: user.daily_plays_used,
+        },
+      });
     }
 
     return res.json({

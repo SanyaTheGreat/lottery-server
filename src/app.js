@@ -28,6 +28,9 @@ import './scheduler/notifier.js';
 import './scheduler/msg-notifier.js';
 import "./scheduler/freeSpinNotifier.js";
 
+// ✅ 2048: авто-завершение активных игр по окончанию weekly периода
+import "./scheduler/game2048Finalizer.js";
+
 // 👉 Telegram Stars webhook
 import telegramWebhook from './controllers/telegram/webhook.js';
 
@@ -172,7 +175,6 @@ app.use("/api", caseChanceRoutes);
 app.use("/api", caseSpinRoutes);
 app.use("/api", inventoryRoutes);
 app.use("/game", game2048Routes);
-
 
 // ✅ новые роуты слотов
 app.use("/api", slotsRoutes);
