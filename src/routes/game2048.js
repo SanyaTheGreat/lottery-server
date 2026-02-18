@@ -5,12 +5,7 @@ import { supabase } from "../services/supabaseClient.js";
 const router = express.Router();
 
 /**
- * У тебя requireJwt() уже стоит на префиксе,
- * он должен положить decoded данные в req.user.
- *
- * Я делаю максимально совместимо:
- * - пробую взять telegram_id из req.user
- * - если нет — 401
+ * requireJwt() уже на префиксе и кладёт decoded в req.user
  */
 function getTelegramId(req) {
   const t = req?.user?.telegram_id ?? req?.user?.telegramId ?? req?.user?.tg_id;
@@ -26,26 +21,18 @@ function utcDateString(d = new Date()) {
 }
 
 function computePeriodBoundsUTC(now = new Date()) {
-  const startAt = new Date(now.toISOString()); // стартуем "сейчас"
+  const startAt = new Date(now.toISOString());
 
-  // 0=Sun..6=Sat
   const day = now.getUTCDay();
   const daysToSunday = (7 - day) % 7;
 
   const sunday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
   sunday.setUTCDate(sunday.getUTCDate() + daysToSunday);
 
-  // конец: воскресенье 21:00 UTC
-  const endAt = new Date(
-    Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 21, 0, 0, 0)
-  );
-
-  // если уже после 21:00 в воскресенье — переносим на след. воскресенье
+  const endAt = new Date(Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 21, 0, 0, 0));
   if (now >= endAt) endAt.setUTCDate(endAt.getUTCDate() + 7);
 
-  // freeze: 20:59 UTC
   const freezeAt = new Date(endAt.getTime() - 60_000);
-
   return { startAt, freezeAt, endAt };
 }
 
@@ -54,14 +41,187 @@ function computePeriodBoundsUTC(now = new Date()) {
  * Генерим seed через randomBytes (64-bit), возвращаем строкой под bigint в БД.
  */
 function randomSeedBigintString() {
-  const buf = crypto.randomBytes(8); // 64-bit
-  const n = buf.readBigUInt64BE(0); // BigInt
+  const buf = crypto.randomBytes(8);
+  const n = buf.readBigUInt64BE(0);
   return n.toString();
 }
 
 /**
+ * --- 2048 helpers (детерминированный RNG + логика движения) ---
+ */
+const GRID_SIZE = 4;
+const ACTIONS_LIMIT = 200;
+
+// splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
+function splitmix64(x) {
+  let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
+  z = (z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n & 0xffffffffffffffffn;
+  z = (z ^ (z >> 27n)) * 0x94d049bb133111ebn & 0xffffffffffffffffn;
+  return (z ^ (z >> 31n)) & 0xffffffffffffffffn;
+}
+
+// [0,1) из 64-bit (берём 53 бита как в JS double)
+function rand01From64(u64) {
+  const v = Number((u64 >> 11n) & ((1n << 53n) - 1n)); // 53 bits
+  return v / 9007199254740992; // 2^53
+}
+
+function makeRng(seedStr, startIndex = 0) {
+  const seed = BigInt(seedStr || "0");
+  let idx = BigInt(startIndex || 0);
+
+  return {
+    next01() {
+      const u = splitmix64((seed + idx) & 0xffffffffffffffffn);
+      idx += 1n;
+      return rand01From64(u);
+    },
+    // сколько значений RNG уже использовали
+    getIndex() {
+      return Number(idx);
+    },
+  };
+}
+
+function emptyGrid() {
+  return Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(0));
+}
+
+function cloneGrid(g) {
+  return g.map((row) => row.slice());
+}
+
+function gridsEqual(a, b) {
+  for (let r = 0; r < GRID_SIZE; r++) {
+    for (let c = 0; c < GRID_SIZE; c++) {
+      if (a[r][c] !== b[r][c]) return false;
+    }
+  }
+  return true;
+}
+
+function getEmptyCells(grid) {
+  const cells = [];
+  for (let r = 0; r < GRID_SIZE; r++) {
+    for (let c = 0; c < GRID_SIZE; c++) {
+      if (!grid[r][c]) cells.push([r, c]);
+    }
+  }
+  return cells;
+}
+
+function spawnTile(grid, rng) {
+  const empties = getEmptyCells(grid);
+  if (empties.length === 0) return false;
+
+  const pick = Math.floor(rng.next01() * empties.length);
+  const [r, c] = empties[pick];
+
+  const v = rng.next01() < 0.9 ? 2 : 4;
+  grid[r][c] = v;
+  return true;
+}
+
+// сдвигаем/сливаем одну линию (длина 4), возвращаем новую линию + очки
+function slideAndMergeLine(line) {
+  const filtered = line.filter((x) => x !== 0);
+  const out = [];
+  let score = 0;
+
+  for (let i = 0; i < filtered.length; i++) {
+    if (i + 1 < filtered.length && filtered[i] === filtered[i + 1]) {
+      const merged = filtered[i] * 2;
+      out.push(merged);
+      score += merged;
+      i += 1;
+    } else {
+      out.push(filtered[i]);
+    }
+  }
+
+  while (out.length < GRID_SIZE) out.push(0);
+  return { line: out, score };
+}
+
+function applyMove(grid, dir) {
+  const g = cloneGrid(grid);
+  let gained = 0;
+
+  const readLine = (i) => {
+    if (dir === "left") return [g[i][0], g[i][1], g[i][2], g[i][3]];
+    if (dir === "right") return [g[i][3], g[i][2], g[i][1], g[i][0]];
+    if (dir === "up") return [g[0][i], g[1][i], g[2][i], g[3][i]];
+    if (dir === "down") return [g[3][i], g[2][i], g[1][i], g[0][i]];
+    return null;
+  };
+
+  const writeLine = (i, line) => {
+    if (dir === "left") {
+      g[i][0] = line[0]; g[i][1] = line[1]; g[i][2] = line[2]; g[i][3] = line[3];
+      return;
+    }
+    if (dir === "right") {
+      g[i][3] = line[0]; g[i][2] = line[1]; g[i][1] = line[2]; g[i][0] = line[3];
+      return;
+    }
+    if (dir === "up") {
+      g[0][i] = line[0]; g[1][i] = line[1]; g[2][i] = line[2]; g[3][i] = line[3];
+      return;
+    }
+    if (dir === "down") {
+      g[3][i] = line[0]; g[2][i] = line[1]; g[1][i] = line[2]; g[0][i] = line[3];
+      return;
+    }
+  };
+
+  for (let i = 0; i < GRID_SIZE; i++) {
+    const line = readLine(i);
+    const { line: merged, score } = slideAndMergeLine(line);
+    gained += score;
+    writeLine(i, merged);
+  }
+
+  return { grid: g, gained, moved: !gridsEqual(grid, g) };
+}
+
+function canMove(grid) {
+  if (getEmptyCells(grid).length > 0) return true;
+
+  for (let r = 0; r < GRID_SIZE; r++) {
+    for (let c = 0; c < GRID_SIZE; c++) {
+      const v = grid[r][c];
+      if (r + 1 < GRID_SIZE && grid[r + 1][c] === v) return true;
+      if (c + 1 < GRID_SIZE && grid[r][c + 1] === v) return true;
+    }
+  }
+  return false;
+}
+
+function normalizeState(state) {
+  const grid = state?.grid;
+  if (!Array.isArray(grid) || grid.length !== GRID_SIZE) return null;
+  for (const row of grid) {
+    if (!Array.isArray(row) || row.length !== GRID_SIZE) return null;
+    for (const v of row) {
+      if (typeof v !== "number") return null;
+    }
+  }
+  return { grid };
+}
+
+function initStateForNewRun(seedStr) {
+  const grid = emptyGrid();
+  const rng = makeRng(seedStr, 0);
+  spawnTile(grid, rng);
+  spawnTile(grid, rng);
+  return {
+    state: { grid },
+    rng_index: rng.getIndex(), // уже использовали RNG
+  };
+}
+
+/**
  * Достаём активный период. Если нет — создаём.
- * (у тебя уже стоит unique index на один active)
  */
 async function getOrCreateActivePeriod(now) {
   const { data: active, error: e1 } = await supabase
@@ -76,7 +236,6 @@ async function getOrCreateActivePeriod(now) {
 
   const { startAt, freezeAt, endAt } = computePeriodBoundsUTC(now);
 
-  // пробуем создать
   const { data: created, error: e2 } = await supabase
     .from("weekly_periods")
     .insert({
@@ -88,7 +247,6 @@ async function getOrCreateActivePeriod(now) {
     .select("*")
     .single();
 
-  // если конфликт из-за unique active — просто прочитаем активный ещё раз
   if (e2) {
     const { data: active2, error: e3 } = await supabase
       .from("weekly_periods")
@@ -108,7 +266,6 @@ async function getOrCreateActivePeriod(now) {
 
 /**
  * POST /game/run/start
- * Возвращает существующий active run или создаёт новый со списанием попытки.
  */
 router.post("/run/start", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -119,12 +276,9 @@ router.post("/run/start", async (req, res) => {
   try {
     console.log(`[2048/start] tg=${tgId} start`);
 
-    // 1) Находим пользователя по telegram_id (UUID нам нужен для FK)
     const { data: user, error: uErr } = await supabase
       .from("users")
-      .select(
-        "id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance"
-      )
+      .select("id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance")
       .eq("telegram_id", tgId)
       .maybeSingle();
 
@@ -132,12 +286,8 @@ router.post("/run/start", async (req, res) => {
       console.error("[2048/start] users select error:", uErr.message);
       return res.status(500).json({ ok: false, error: "DB error (users)" });
     }
-    if (!user) {
-      // теоретически не должен случаться, потому что /auth/telegram создаёт user
-      return res.status(404).json({ ok: false, error: "User not found" });
-    }
+    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    // 2) Daily reset (UTC)
     const today = utcDateString(now);
 
     let dailyDayUtc = user.daily_day_utc ? String(user.daily_day_utc) : null;
@@ -149,7 +299,7 @@ router.post("/run/start", async (req, res) => {
 
     if (needsReset) {
       dailyDayUtc = today;
-      dailyAttempts = 4; // 3 + 1 daily bonus
+      dailyAttempts = 4;
       dailyPlaysUsed = 0;
 
       const { error: rErr } = await supabase
@@ -168,29 +318,23 @@ router.post("/run/start", async (req, res) => {
       }
     }
 
-    // 3) Дневной лимит 20 стартов
     if (dailyPlaysUsed >= 20) {
       return res.status(429).json({ ok: false, error: "Daily limit reached (20)" });
     }
 
-    // 4) Берём активный период
     const period = await getOrCreateActivePeriod(now);
 
     const freezeAt = new Date(period.freeze_at);
     const endAt = new Date(period.end_at);
 
-    // если период уже должен быть frozen/closed, но cron ещё не отработал — запрещаем старт
-    if (now >= endAt) {
-      return res.status(423).json({ ok: false, error: "Season rollover in progress. Try again." });
-    }
+    if (now >= endAt) return res.status(423).json({ ok: false, error: "Season rollover in progress. Try again." });
     if (now >= freezeAt || period.status === "frozen") {
       return res.status(423).json({ ok: false, error: "Season is frozen. New runs disabled." });
     }
 
-    // 5) Если уже есть active run — вернуть его (не списываем попытку второй раз)
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -216,7 +360,6 @@ router.post("/run/start", async (req, res) => {
       });
     }
 
-    // 6) Списываем попытку (daily -> referral)
     let usedFrom = null;
 
     if (dailyAttempts > 0) {
@@ -231,7 +374,6 @@ router.post("/run/start", async (req, res) => {
 
     dailyPlaysUsed += 1;
 
-    // update attempts (вручную updated_at)
     const { error: updErr } = await supabase
       .from("users")
       .update({
@@ -247,28 +389,31 @@ router.post("/run/start", async (req, res) => {
       return res.status(500).json({ ok: false, error: "DB error (attempts)" });
     }
 
-    // 7) Создаём run
     const seed = randomSeedBigintString();
+    const init = initStateForNewRun(seed);
 
     const { data: createdRun, error: insErr } = await supabase
       .from("game_runs")
       .insert({
         user_id: user.id,
         period_id: period.id,
-        seed, // bigint строкой
+        seed,
         status: "active",
+        state: init.state,
+        rng_index: init.rng_index,
+        moves: 0,
+        current_score: 0,
         updated_at: new Date().toISOString(),
       })
-      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
       .single();
 
     if (insErr) {
       console.error("[2048/start] run insert error:", insErr.message);
 
-      // возможный race — пробуем вернуть активный
       const { data: fallback } = await supabase
         .from("game_runs")
-        .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+        .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
         .eq("user_id", user.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
@@ -316,7 +461,7 @@ router.post("/run/start", async (req, res) => {
 /**
  * POST /game/run/move
  * Body: { dir: "up" | "down" | "left" | "right" }
- * Заглушка: просто пишет действие в actions (jsonb массив), не меняет score/поле.
+ * Реальная 2048-логика: двигаем/сливаем, спавним тайл, сохраняем state/score/moves/rng_index.
  */
 router.post("/run/move", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -333,12 +478,9 @@ router.post("/run/move", async (req, res) => {
   try {
     console.log(`[2048/move] tg=${tgId} dir=${dir}`);
 
-    // user
     const { data: user, error: uErr } = await supabase
       .from("users")
-      .select(
-        "id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance"
-      )
+      .select("id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance")
       .eq("telegram_id", tgId)
       .maybeSingle();
 
@@ -348,10 +490,9 @@ router.post("/run/move", async (req, res) => {
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    // active run
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -368,17 +509,72 @@ router.post("/run/move", async (req, res) => {
 
     const run = activeRuns[0];
 
+    // state
+    let st = normalizeState(run.state);
+    let rngIndex = Number(run.rng_index ?? 0);
+    const moves = Number(run.moves ?? 0);
+    const score = Number(run.current_score ?? 0);
+
+    // если state вдруг пустой (старые записи) — инициализируем без списания попыток
+    if (!st) {
+      const init = initStateForNewRun(run.seed);
+      st = init.state;
+      rngIndex = init.rng_index;
+    }
+
+    const beforeGrid = st.grid;
+    const { grid: movedGrid, gained, moved } = applyMove(beforeGrid, dir);
+
+    // если ход ничего не изменил — просто вернём текущее (без спавна/инкрементов)
+    if (!moved) {
+      return res.json({
+        ok: true,
+        moved: false,
+        gained: 0,
+        run: {
+          ...run,
+          state: st,
+          rng_index: rngIndex,
+          moves,
+          current_score: score,
+        },
+      });
+    }
+
+    const rng = makeRng(run.seed, rngIndex);
+    const afterGrid = cloneGrid(movedGrid);
+
+    // после успешного хода всегда спавним новый тайл
+    spawnTile(afterGrid, rng);
+
+    const nextScore = score + gained;
+    const nextMoves = moves + 1;
+    const nextRngIndex = rng.getIndex();
+
+    // debug actions (не влияет на результат)
     const prevActions = Array.isArray(run.actions) ? run.actions : [];
-    const nextActions = [...prevActions, { t: new Date().toISOString(), dir }];
+    let nextActions = [...prevActions, { t: new Date().toISOString(), dir, gained }];
+    if (nextActions.length > ACTIONS_LIMIT) nextActions = nextActions.slice(-ACTIONS_LIMIT);
+
+    const nextState = { grid: afterGrid };
+
+    // game over check
+    const stillCanMove = canMove(afterGrid);
+    const nextStatus = stillCanMove ? "active" : "finished";
 
     const { data: updatedRun, error: upErr } = await supabase
       .from("game_runs")
       .update({
+        state: nextState,
+        rng_index: nextRngIndex,
+        moves: nextMoves,
+        current_score: nextScore,
         actions: nextActions,
+        status: nextStatus,
         updated_at: new Date().toISOString(),
       })
       .eq("id", run.id)
-      .select("id, user_id, period_id, seed, actions, current_score, status, created_at, updated_at")
+      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
       .single();
 
     if (upErr) {
@@ -388,8 +584,8 @@ router.post("/run/move", async (req, res) => {
 
     return res.json({
       ok: true,
-      stub: true,
-      move: { dir },
+      moved: true,
+      gained,
       run: updatedRun,
       attempts: {
         daily_day_utc: user.daily_day_utc,
