@@ -55,8 +55,8 @@ const ACTIONS_LIMIT = 200;
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
   let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
-  z = (z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n & 0xffffffffffffffffn;
-  z = (z ^ (z >> 27n)) * 0x94d049bb133111ebn & 0xffffffffffffffffn;
+  z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xffffffffffffffffn;
+  z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & 0xffffffffffffffffn;
   return (z ^ (z >> 31n)) & 0xffffffffffffffffn;
 }
 
@@ -157,19 +157,31 @@ function applyMove(grid, dir) {
 
   const writeLine = (i, line) => {
     if (dir === "left") {
-      g[i][0] = line[0]; g[i][1] = line[1]; g[i][2] = line[2]; g[i][3] = line[3];
+      g[i][0] = line[0];
+      g[i][1] = line[1];
+      g[i][2] = line[2];
+      g[i][3] = line[3];
       return;
     }
     if (dir === "right") {
-      g[i][3] = line[0]; g[i][2] = line[1]; g[i][1] = line[2]; g[i][0] = line[3];
+      g[i][3] = line[0];
+      g[i][2] = line[1];
+      g[i][1] = line[2];
+      g[i][0] = line[3];
       return;
     }
     if (dir === "up") {
-      g[0][i] = line[0]; g[1][i] = line[1]; g[2][i] = line[2]; g[3][i] = line[3];
+      g[0][i] = line[0];
+      g[1][i] = line[1];
+      g[2][i] = line[2];
+      g[3][i] = line[3];
       return;
     }
     if (dir === "down") {
-      g[3][i] = line[0]; g[2][i] = line[1]; g[1][i] = line[2]; g[0][i] = line[3];
+      g[3][i] = line[0];
+      g[2][i] = line[1];
+      g[1][i] = line[2];
+      g[0][i] = line[3];
       return;
     }
   };
@@ -216,7 +228,7 @@ function initStateForNewRun(seedStr) {
   spawnTile(grid, rng);
   return {
     state: { grid },
-    rng_index: rng.getIndex(), // уже использовали RNG
+    rng_index: rng.getIndex(),
   };
 }
 
@@ -334,7 +346,9 @@ router.post("/run/start", async (req, res) => {
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+      )
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -405,7 +419,9 @@ router.post("/run/start", async (req, res) => {
         current_score: 0,
         updated_at: new Date().toISOString(),
       })
-      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+      )
       .single();
 
     if (insErr) {
@@ -413,7 +429,9 @@ router.post("/run/start", async (req, res) => {
 
       const { data: fallback } = await supabase
         .from("game_runs")
-        .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
+        .select(
+          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+        )
         .eq("user_id", user.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
@@ -492,7 +510,9 @@ router.post("/run/move", async (req, res) => {
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+      )
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -509,13 +529,11 @@ router.post("/run/move", async (req, res) => {
 
     const run = activeRuns[0];
 
-    // state
     let st = normalizeState(run.state);
     let rngIndex = Number(run.rng_index ?? 0);
     const moves = Number(run.moves ?? 0);
     const score = Number(run.current_score ?? 0);
 
-    // если state вдруг пустой (старые записи) — инициализируем без списания попыток
     if (!st) {
       const init = initStateForNewRun(run.seed);
       st = init.state;
@@ -525,7 +543,6 @@ router.post("/run/move", async (req, res) => {
     const beforeGrid = st.grid;
     const { grid: movedGrid, gained, moved } = applyMove(beforeGrid, dir);
 
-    // если ход ничего не изменил — просто вернём текущее (без спавна/инкрементов)
     if (!moved) {
       return res.json({
         ok: true,
@@ -544,21 +561,18 @@ router.post("/run/move", async (req, res) => {
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
 
-    // после успешного хода всегда спавним новый тайл
     spawnTile(afterGrid, rng);
 
     const nextScore = score + gained;
     const nextMoves = moves + 1;
     const nextRngIndex = rng.getIndex();
 
-    // debug actions (не влияет на результат)
     const prevActions = Array.isArray(run.actions) ? run.actions : [];
     let nextActions = [...prevActions, { t: new Date().toISOString(), dir, gained }];
     if (nextActions.length > ACTIONS_LIMIT) nextActions = nextActions.slice(-ACTIONS_LIMIT);
 
     const nextState = { grid: afterGrid };
 
-    // game over check
     const stillCanMove = canMove(afterGrid);
     const nextStatus = stillCanMove ? "active" : "finished";
 
@@ -574,7 +588,9 @@ router.post("/run/move", async (req, res) => {
         updated_at: new Date().toISOString(),
       })
       .eq("id", run.id)
-      .select("id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at")
+      .select(
+        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
+      )
       .single();
 
     if (upErr) {
