@@ -2,24 +2,32 @@
 import { supabase } from "../services/supabaseClient.js";
 
 /**
- * 2048 Finalizer
- * - Запускается вместе с сервером (просто импортом файла).
- * - Периодически проверяет weekly_periods.
- * - Если период уже закончился (now >= end_at) — завершает все активные game_runs этого периода.
+ * 2048 Finalizer / Weekly Rollover
  *
- * ВАЖНО:
- * - Идемпотентно: повторный запуск ничего не ломает (апдейт только status='active' -> 'finished').
- * - Не трогает weekly_periods.status (это может делать другой крон/логика).
+ * Что делает:
+ * - Периодически вызывает RPC: ffg_rollover_weekly_periods()
+ *
+ * В БД эта функция:
+ * 1) Находит weekly_periods где end_at <= now() и status != 'finished'
+ * 2) Вызывает ffg_finalize_weekly_period(period_id):
+ *    - завершает активные game_runs
+ *    - обновляет weekly_scores
+ *    - записывает weekly_winners TOP 10
+ *    - ставит period.status = 'finished'
+ * 3) Если нет активного периода — создаёт новый weekly_period со status='active'
+ *
+ * Node здесь только триггер.
+ * Вся бизнес-логика находится в Postgres.
  */
 
-const ENABLED = (process.env.GAME2048_FINALIZER_ENABLED ?? "true") === "true";
-const INTERVAL_MS = Number(process.env.GAME2048_FINALIZER_INTERVAL_MS ?? 60_000);
+const ENABLED =
+  (process.env.GAME2048_FINALIZER_ENABLED ?? "true") === "true";
+
+const INTERVAL_MS = Number(
+  process.env.GAME2048_FINALIZER_INTERVAL_MS ?? 60_000
+);
 
 let running = false;
-
-function nowIso() {
-  return new Date().toISOString();
-}
 
 async function tick() {
   if (!ENABLED) return;
@@ -29,89 +37,48 @@ async function tick() {
   const startedAt = Date.now();
 
   try {
-    const now = new Date();
-    const nowStr = now.toISOString();
+    const { data, error } = await supabase.rpc(
+      "ffg_rollover_weekly_periods"
+    );
 
-    // 1) Находим периоды, которые уже закончились
-    // Берём несколько последних, чтобы не сканить всю таблицу.
-    const { data: periods, error: pErr } = await supabase
-      .from("weekly_periods")
-      .select("id, status, end_at, freeze_at, start_at")
-      .lte("end_at", nowStr)
-      .order("end_at", { ascending: false })
-      .limit(25);
-
-    if (pErr) {
-      console.error("[2048/finalizer] weekly_periods select error:", pErr.message);
+    if (error) {
+      console.error(
+        "[2048/finalizer] RPC error ffg_rollover_weekly_periods:",
+        error.message
+      );
       return;
     }
 
-    if (!periods?.length) {
-      // ничего не закончилось
-      return;
-    }
+    const payload = data ?? {};
+    const closed = payload.closed_periods ?? 0;
+    const created = payload.created_new_active ?? false;
 
-    let totalFinished = 0;
-    const finishedByPeriod = [];
-
-    // 2) Для каждого законченного периода завершаем все активные рансы
-    for (const p of periods) {
-      const periodId = p.id;
-      if (!periodId) continue;
-
-      // Сначала быстро проверим, есть ли вообще активные рансы (чтобы меньше писать)
-      const { count: activeCount, error: cErr } = await supabase
-        .from("game_runs")
-        .select("id", { count: "exact", head: true })
-        .eq("period_id", periodId)
-        .eq("status", "active");
-
-      if (cErr) {
-        console.error(`[2048/finalizer] game_runs count error period=${periodId}:`, cErr.message);
-        continue;
-      }
-
-      if (!activeCount || activeCount <= 0) continue;
-
-      const { data: updated, error: uErr } = await supabase
-        .from("game_runs")
-        .update({
-          status: "finished",
-          updated_at: nowIso(),
-        })
-        .eq("period_id", periodId)
-        .eq("status", "active")
-        .select("id");
-
-      if (uErr) {
-        console.error(`[2048/finalizer] game_runs update error period=${periodId}:`, uErr.message);
-        continue;
-      }
-
-      const finished = Array.isArray(updated) ? updated.length : 0;
-      totalFinished += finished;
-      finishedByPeriod.push({ periodId, finished });
-    }
-
-    if (totalFinished > 0) {
+    if (closed > 0 || created) {
       console.log(
-        `[2048/finalizer] finished=${totalFinished} period(s)=${finishedByPeriod
-          .map((x) => `${x.periodId}:${x.finished}`)
-          .join(", ")} in ${Date.now() - startedAt}ms`
+        `[2048/finalizer] rollover closed_periods=${closed} created_new_active=${created} duration=${
+          Date.now() - startedAt
+        }ms`
       );
     }
-  } catch (e) {
-    console.error("[2048/finalizer] unexpected:", e);
+  } catch (err) {
+    console.error("[2048/finalizer] unexpected error:", err);
   } finally {
     running = false;
   }
 }
 
 if (ENABLED) {
-  console.log(`[2048/finalizer] enabled interval=${INTERVAL_MS}ms`);
-  // стартуем сразу (через 2 секунды, чтобы сервер поднялся)
+  console.log(
+    `[2048/finalizer] enabled interval=${INTERVAL_MS}ms`
+  );
+
+  // Первый запуск через 2 секунды
   setTimeout(() => tick(), 2000);
+
+  // Повторный запуск по интервалу
   setInterval(() => tick(), INTERVAL_MS);
 } else {
-  console.log("[2048/finalizer] disabled by env GAME2048_FINALIZER_ENABLED=false");
+  console.log(
+    "[2048/finalizer] disabled by env GAME2048_FINALIZER_ENABLED=false"
+  );
 }

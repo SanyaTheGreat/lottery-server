@@ -53,7 +53,7 @@ const GRID_SIZE = 4;
 const ACTIONS_LIMIT = 200;
 
 const FINISH_REASONS = new Set(["no_moves", "manual", "period_end"]);
-const LEADERBOARD_TABLE = "game2048_leaderboard"; // <-- если у тебя другое имя таблицы — поменяй тут
+const LEADERBOARD_TABLE = "weekly_scores"; // <-- если у тебя другое имя таблицы — поменяй тут
 
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
@@ -284,7 +284,7 @@ async function getOrCreateActivePeriod(now) {
 async function finalizeRun({ run, reason }) {
   const nowIso = new Date().toISOString();
   const finalScore = Number(run.current_score ?? 0);
-  const finalMoves = Number(run.moves ?? 0);
+  
 
   // 1) завершить run (idempotent: если уже finished — просто вернуть как есть)
   if (run.status !== "finished") {
@@ -295,8 +295,7 @@ async function finalizeRun({ run, reason }) {
         finished_reason: reason,
         finished_at: nowIso,
         // на всякий: фиксируем финал (если в таблице есть такие колонки — ок, если нет — supabase вернёт ошибку)
-        final_score: finalScore,
-        final_moves: finalMoves,
+        
         updated_at: nowIso,
       })
       .eq("id", run.id)
