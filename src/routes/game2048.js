@@ -55,6 +55,12 @@ const ACTIONS_LIMIT = 200;
 const FINISH_REASONS = new Set(["no_moves", "manual", "period_end"]);
 const LEADERBOARD_TABLE = "weekly_scores"; // <-- если у тебя другое имя таблицы — поменяй тут
 
+// ⚡ Селекты: клиенту actions не нужны на каждый ход
+const RUN_SELECT_CLIENT =
+  "id,user_id,period_id,seed,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
+const RUN_SELECT_WITH_ACTIONS =
+  "id,user_id,period_id,seed,actions,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
+
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
   let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
@@ -284,7 +290,6 @@ async function getOrCreateActivePeriod(now) {
 async function finalizeRun({ run, reason }) {
   const nowIso = new Date().toISOString();
   const finalScore = Number(run.current_score ?? 0);
-  
 
   // 1) завершить run (idempotent: если уже finished — просто вернуть как есть)
   if (run.status !== "finished") {
@@ -294,19 +299,13 @@ async function finalizeRun({ run, reason }) {
         status: "finished",
         finished_reason: reason,
         finished_at: nowIso,
-        // на всякий: фиксируем финал (если в таблице есть такие колонки — ок, если нет — supabase вернёт ошибку)
-        
         updated_at: nowIso,
       })
       .eq("id", run.id)
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_CLIENT)
       .single();
 
     if (finErr) {
-      // Если у тебя ещё нет колонок finished_reason/finished_at/final_score/final_moves — будет ошибка.
-      // Тогда просто закрываем минимумом.
       const msg = String(finErr.message || "");
       console.error("[2048/finalize] finish update error:", msg);
 
@@ -317,9 +316,7 @@ async function finalizeRun({ run, reason }) {
           updated_at: nowIso,
         })
         .eq("id", run.id)
-        .select(
-          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, created_at, updated_at"
-        )
+        .select(RUN_SELECT_CLIENT)
         .single();
 
       if (finErr2) throw new Error(`finalize minimal update failed: ${finErr2.message}`);
@@ -330,7 +327,6 @@ async function finalizeRun({ run, reason }) {
   }
 
   // 2) лидерборд: best_score per user per period
-  // Если таблицы ещё нет или имя другое — увидишь ошибку в логах.
   let bestScore = finalScore;
 
   const { data: existingLb, error: lbSelErr } = await supabase
@@ -342,7 +338,6 @@ async function finalizeRun({ run, reason }) {
 
   if (lbSelErr) {
     console.error("[2048/finalize] leaderboard select error:", lbSelErr.message);
-    // не ломаем финиш игры из-за лидерборда
     return { run, leaderboard: null };
   }
 
@@ -378,7 +373,7 @@ async function finalizeRun({ run, reason }) {
         updated_at: nowIso,
       })
       .eq("id", existingLb.id)
-      .select("id, period_id, user_id, best_score, created_at, updated_at")
+      .select("id, period_id, user_id, best_score, achieved_at, updated_at")
       .single();
 
     if (lbUpdErr) {
@@ -389,10 +384,9 @@ async function finalizeRun({ run, reason }) {
     return { run, leaderboard: lbUpd };
   }
 
-  // score не улучшил best
   const { data: lbSame } = await supabase
     .from(LEADERBOARD_TABLE)
-    .select("id, period_id, user_id, best_score, created_at, updated_at")
+    .select("id, period_id, user_id, best_score, achieved_at, updated_at")
     .eq("id", existingLb.id)
     .maybeSingle();
 
@@ -469,9 +463,7 @@ router.post("/run/start", async (req, res) => {
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_CLIENT)
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -542,9 +534,7 @@ router.post("/run/start", async (req, res) => {
         current_score: 0,
         updated_at: new Date().toISOString(),
       })
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_CLIENT)
       .single();
 
     if (insErr) {
@@ -552,9 +542,7 @@ router.post("/run/start", async (req, res) => {
 
       const { data: fallback } = await supabase
         .from("game_runs")
-        .select(
-          "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-        )
+        .select(RUN_SELECT_CLIENT)
         .eq("user_id", user.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
@@ -601,8 +589,6 @@ router.post("/run/start", async (req, res) => {
 
 /**
  * POST /game/run/finish
- * Body: { reason?: "manual" }
- * Завершить игру вручную и записать результат в лидерборд (если лучше).
  */
 router.post("/run/finish", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -617,7 +603,7 @@ router.post("/run/finish", async (req, res) => {
 
     const { data: user, error: uErr } = await supabase
       .from("users")
-      .select("id, telegram_id")
+      .select("id")
       .eq("telegram_id", tgId)
       .maybeSingle();
 
@@ -629,9 +615,7 @@ router.post("/run/finish", async (req, res) => {
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_CLIENT)
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -663,9 +647,6 @@ router.post("/run/finish", async (req, res) => {
 
 /**
  * POST /game/run/move
- * Body: { dir: "up" | "down" | "left" | "right" }
- * Реальная 2048-логика: двигаем/сливаем, спавним тайл, сохраняем state/score/moves/rng_index.
- * Если больше нет ходов — game over -> status=finished + запись в лидерборд.
  */
 router.post("/run/move", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -680,11 +661,10 @@ router.post("/run/move", async (req, res) => {
   }
 
   try {
-    console.log(`[2048/move] tg=${tgId} dir=${dir}`);
-
+    // users: только id (attempts не нужны для каждого хода)
     const { data: user, error: uErr } = await supabase
       .from("users")
-      .select("id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance")
+      .select("id")
       .eq("telegram_id", tgId)
       .maybeSingle();
 
@@ -694,11 +674,10 @@ router.post("/run/move", async (req, res) => {
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
+    // run: без actions
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_WITH_ACTIONS) // тут actions нужны только чтобы дописать массив
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -715,39 +694,6 @@ router.post("/run/move", async (req, res) => {
 
     const run = activeRuns[0];
 
-    // защита: если период уже закончился/заморожен — завершаем ран (period_end)
-    try {
-      const { data: period, error: pErr } = await supabase
-        .from("weekly_periods")
-        .select("id, status, freeze_at, end_at")
-        .eq("id", run.period_id)
-        .maybeSingle();
-
-      if (!pErr && period) {
-        const now = new Date();
-        const freezeAt = period.freeze_at ? new Date(period.freeze_at) : null;
-        const endAt = period.end_at ? new Date(period.end_at) : null;
-
-        const shouldForceFinish =
-          (endAt && now >= endAt) || (freezeAt && now >= freezeAt) || period.status === "frozen" || period.status === "closed";
-
-        if (shouldForceFinish) {
-          const out = await finalizeRun({ run, reason: "period_end" });
-          return res.status(423).json({
-            ok: true,
-            finished: true,
-            reason: "period_end",
-            run: out.run,
-            leaderboard: out.leaderboard,
-            error: "Season is frozen/ended. Run finished.",
-          });
-        }
-      }
-    } catch (e) {
-      // если тут что-то пошло не так — не ломаем ход, просто лог
-      console.error("[2048/move] period check error:", e?.message || e);
-    }
-
     let st = normalizeState(run.state);
     let rngIndex = Number(run.rng_index ?? 0);
     const moves = Number(run.moves ?? 0);
@@ -759,6 +705,43 @@ router.post("/run/move", async (req, res) => {
       rngIndex = init.rng_index;
     }
 
+    // период-чек: раз в 8 ходов, а не каждый
+    if (moves % 8 === 0) {
+      try {
+        const { data: period, error: pErr } = await supabase
+          .from("weekly_periods")
+          .select("id,status,freeze_at,end_at")
+          .eq("id", run.period_id)
+          .maybeSingle();
+
+        if (!pErr && period) {
+          const now = new Date();
+          const freezeAt = period.freeze_at ? new Date(period.freeze_at) : null;
+          const endAt = period.end_at ? new Date(period.end_at) : null;
+
+          const shouldForceFinish =
+            (endAt && now >= endAt) ||
+            (freezeAt && now >= freezeAt) ||
+            period.status === "frozen" ||
+            period.status === "closed";
+
+          if (shouldForceFinish) {
+            const out = await finalizeRun({ run, reason: "period_end" });
+            return res.status(423).json({
+              ok: true,
+              finished: true,
+              reason: "period_end",
+              run: out.run,
+              leaderboard: out.leaderboard,
+              error: "Season is frozen/ended. Run finished.",
+            });
+          }
+        }
+      } catch (e) {
+        console.error("[2048/move] period check error:", e?.message || e);
+      }
+    }
+
     const beforeGrid = st.grid;
     const { grid: movedGrid, gained, moved } = applyMove(beforeGrid, dir);
 
@@ -768,88 +751,113 @@ router.post("/run/move", async (req, res) => {
         moved: false,
         gained: 0,
         run: {
-          ...run,
+          id: run.id,
+          user_id: run.user_id,
+          period_id: run.period_id,
+          seed: run.seed,
           state: st,
           rng_index: rngIndex,
           moves,
           current_score: score,
+          status: run.status,
+          finished_reason: run.finished_reason,
+          finished_at: run.finished_at,
+          created_at: run.created_at,
+          updated_at: run.updated_at,
         },
       });
     }
 
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
-
-    // после успешного хода всегда спавним новый тайл
     spawnTile(afterGrid, rng);
 
     const nextScore = score + gained;
     const nextMoves = moves + 1;
     const nextRngIndex = rng.getIndex();
+    const nextState = { grid: afterGrid };
 
     const prevActions = Array.isArray(run.actions) ? run.actions : [];
     let nextActions = [...prevActions, { t: new Date().toISOString(), dir, gained }];
     if (nextActions.length > ACTIONS_LIMIT) nextActions = nextActions.slice(-ACTIONS_LIMIT);
 
-    const nextState = { grid: afterGrid };
-
     const stillCanMove = canMove(afterGrid);
     const nextStatus = stillCanMove ? "active" : "finished";
+    const nowIso = new Date().toISOString();
 
-    const { data: updatedRun, error: upErr } = await supabase
+    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run
+    if (nextStatus === "active") {
+      const { error: upErr } = await supabase
+        .from("game_runs")
+        .update({
+          state: nextState,
+          rng_index: nextRngIndex,
+          moves: nextMoves,
+          current_score: nextScore,
+          actions: nextActions, // сохраняем actions как и раньше
+          status: "active",
+          updated_at: nowIso,
+        })
+        .eq("id", run.id);
+
+      if (upErr) {
+        console.error("[2048/move] game_runs update error:", upErr.message);
+        return res.status(500).json({ ok: false, error: "DB error (update run)" });
+      }
+
+      return res.json({
+        ok: true,
+        moved: true,
+        gained,
+        run: {
+          id: run.id,
+          user_id: run.user_id,
+          period_id: run.period_id,
+          seed: run.seed,
+          state: nextState,
+          rng_index: nextRngIndex,
+          moves: nextMoves,
+          current_score: nextScore,
+          status: "active",
+          finished_reason: null,
+          finished_at: null,
+          created_at: run.created_at,
+          updated_at: nowIso,
+        },
+      });
+    }
+
+    // game over: тут нужно вернуть актуальный run и сделать finalize
+    const { data: updatedRun, error: upErr2 } = await supabase
       .from("game_runs")
       .update({
         state: nextState,
         rng_index: nextRngIndex,
         moves: nextMoves,
         current_score: nextScore,
-        actions: nextActions,
-        status: nextStatus,
-        updated_at: new Date().toISOString(),
+        actions: nextActions, // сохраняем actions
+        status: "finished",
+        updated_at: nowIso,
       })
       .eq("id", run.id)
-      .select(
-        "id, user_id, period_id, seed, actions, state, rng_index, moves, current_score, status, finished_reason, finished_at, created_at, updated_at"
-      )
+      .select(RUN_SELECT_CLIENT) // в ответ actions не отдаём
       .single();
 
-    if (upErr) {
-      console.error("[2048/move] game_runs update error:", upErr.message);
-      return res.status(500).json({ ok: false, error: "DB error (update run)" });
+    if (upErr2) {
+      console.error("[2048/move] game_runs update error:", upErr2.message);
+      return res.status(500).json({ ok: false, error: "DB error (finish run)" });
     }
 
-    // если это game over — финишим и пишем лидерборд
-    if (updatedRun.status === "finished") {
-      const out = await finalizeRun({ run: updatedRun, reason: "no_moves" });
-
-      return res.json({
-        ok: true,
-        moved: true,
-        gained,
-        finished: true,
-        reason: "no_moves",
-        run: out.run,
-        leaderboard: out.leaderboard,
-        attempts: {
-          daily_day_utc: user.daily_day_utc,
-          daily_attempts_remaining: user.daily_attempts_remaining,
-          referral_attempts_balance: user.referral_attempts_balance,
-          daily_plays_used: user.daily_plays_used,
-        },
-      });
-    }
+    const out = await finalizeRun({ run: updatedRun, reason: "no_moves" });
 
     return res.json({
       ok: true,
       moved: true,
       gained,
-      run: updatedRun,
-      attempts: {
-        daily_day_utc: user.daily_day_utc,
-        daily_attempts_remaining: user.daily_attempts_remaining,
-        referral_attempts_balance: user.referral_attempts_balance,
-        daily_plays_used: user.daily_plays_used,
-      },
+      finished: true,
+      reason: "no_moves",
+      run: out.run,
+      leaderboard: out.leaderboard,
     });
   } catch (e) {
     console.error("[2048/move] unexpected:", e);
