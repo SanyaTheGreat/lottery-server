@@ -356,10 +356,10 @@ async function finalizeRun({ run, reason }) {
         period_id: run.period_id,
         user_id: run.user_id,
         best_score: bestScore,
-        created_at: nowIso,
+        achieved_at: nowIso,
         updated_at: nowIso,
       })
-      .select("id, period_id, user_id, best_score, created_at, updated_at")
+      .select("id, period_id, user_id, best_score, achieved_at, updated_at")
       .single();
 
     if (lbInsErr) {
