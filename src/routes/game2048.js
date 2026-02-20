@@ -42,7 +42,7 @@ function computePeriodBoundsUTC(now = new Date()) {
  */
 function randomSeedBigintString() {
   const buf = crypto.randomBytes(8);
-  const n = buf.readBigUInt64BE(0);
+  const n = buf.readBigUInt64BE(0) & ((1n << 63n) - 1n);
   return n.toString();
 }
 
