@@ -118,16 +118,21 @@ function getEmptyCells(grid) {
   return cells;
 }
 
+/**
+ * ✅ теперь возвращаем инфу о спавне, чтобы фронт мог моментально показать
+ * return: { r, c, v } | null
+ */
 function spawnTile(grid, rng) {
   const empties = getEmptyCells(grid);
-  if (empties.length === 0) return false;
+  if (empties.length === 0) return null;
 
   const pick = Math.floor(rng.next01() * empties.length);
   const [r, c] = empties[pick];
 
   const v = rng.next01() < 0.9 ? 2 : 4;
   grid[r][c] = v;
-  return true;
+
+  return { r, c, v };
 }
 
 function slideAndMergeLine(line) {
@@ -674,10 +679,10 @@ router.post("/run/move", async (req, res) => {
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    // run: без actions
+    // run: actions нужны только чтобы дописать массив
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select(RUN_SELECT_WITH_ACTIONS) // тут actions нужны только чтобы дописать массив
+      .select(RUN_SELECT_WITH_ACTIONS)
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -750,6 +755,7 @@ router.post("/run/move", async (req, res) => {
         ok: true,
         moved: false,
         gained: 0,
+        spawn: null,
         run: {
           id: run.id,
           user_id: run.user_id,
@@ -770,7 +776,9 @@ router.post("/run/move", async (req, res) => {
 
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
-    spawnTile(afterGrid, rng);
+
+    // ✅ вот это и есть "истина" где/что заспавнилось
+    const spawn = spawnTile(afterGrid, rng);
 
     const nextScore = score + gained;
     const nextMoves = moves + 1;
@@ -785,7 +793,7 @@ router.post("/run/move", async (req, res) => {
     const nextStatus = stillCanMove ? "active" : "finished";
     const nowIso = new Date().toISOString();
 
-    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run
+    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
       const { error: upErr } = await supabase
         .from("game_runs")
@@ -794,7 +802,7 @@ router.post("/run/move", async (req, res) => {
           rng_index: nextRngIndex,
           moves: nextMoves,
           current_score: nextScore,
-          actions: nextActions, // сохраняем actions как и раньше
+          actions: nextActions,
           status: "active",
           updated_at: nowIso,
         })
@@ -809,6 +817,7 @@ router.post("/run/move", async (req, res) => {
         ok: true,
         moved: true,
         gained,
+        spawn, // ✅ добавили
         run: {
           id: run.id,
           user_id: run.user_id,
@@ -835,12 +844,12 @@ router.post("/run/move", async (req, res) => {
         rng_index: nextRngIndex,
         moves: nextMoves,
         current_score: nextScore,
-        actions: nextActions, // сохраняем actions
+        actions: nextActions,
         status: "finished",
         updated_at: nowIso,
       })
       .eq("id", run.id)
-      .select(RUN_SELECT_CLIENT) // в ответ actions не отдаём
+      .select(RUN_SELECT_CLIENT)
       .single();
 
     if (upErr2) {
@@ -854,6 +863,7 @@ router.post("/run/move", async (req, res) => {
       ok: true,
       moved: true,
       gained,
+      spawn, // ✅ добавили
       finished: true,
       reason: "no_moves",
       run: out.run,
