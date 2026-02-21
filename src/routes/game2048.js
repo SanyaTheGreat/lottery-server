@@ -50,16 +50,13 @@ function randomSeedBigintString() {
  * --- 2048 helpers (детерминированный RNG + логика движения) ---
  */
 const GRID_SIZE = 4;
-const ACTIONS_LIMIT = 200;
 
 const FINISH_REASONS = new Set(["no_moves", "manual", "period_end"]);
 const LEADERBOARD_TABLE = "weekly_scores"; // <-- если у тебя другое имя таблицы — поменяй тут
 
-// ⚡ Селекты: клиенту actions не нужны на каждый ход
+// ⚡ Селекты: клиенту actions не нужны
 const RUN_SELECT_CLIENT =
   "id,user_id,period_id,seed,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
-const RUN_SELECT_WITH_ACTIONS =
-  "id,user_id,period_id,seed,actions,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
 
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
@@ -119,7 +116,7 @@ function getEmptyCells(grid) {
 }
 
 /**
- * ✅ теперь возвращаем инфу о спавне, чтобы фронт мог моментально показать
+ * ✅ возвращаем инфу о спавне, чтобы фронт мог моментально показать
  * return: { r, c, v } | null
  */
 function spawnTile(grid, rng) {
@@ -296,7 +293,6 @@ async function finalizeRun({ run, reason }) {
   const nowIso = new Date().toISOString();
   const finalScore = Number(run.current_score ?? 0);
 
-  // 1) завершить run (idempotent: если уже finished — просто вернуть как есть)
   if (run.status !== "finished") {
     const { data: finished, error: finErr } = await supabase
       .from("game_runs")
@@ -331,7 +327,6 @@ async function finalizeRun({ run, reason }) {
     }
   }
 
-  // 2) лидерборд: best_score per user per period
   let bestScore = finalScore;
 
   const { data: existingLb, error: lbSelErr } = await supabase
@@ -666,7 +661,6 @@ router.post("/run/move", async (req, res) => {
   }
 
   try {
-    // users: только id (attempts не нужны для каждого хода)
     const { data: user, error: uErr } = await supabase
       .from("users")
       .select("id")
@@ -679,10 +673,10 @@ router.post("/run/move", async (req, res) => {
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    // run: actions нужны только чтобы дописать массив
+    // ✅ больше не селектим actions
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
-      .select(RUN_SELECT_WITH_ACTIONS)
+      .select(RUN_SELECT_CLIENT)
       .eq("user_id", user.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -777,17 +771,13 @@ router.post("/run/move", async (req, res) => {
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
 
-    // ✅ вот это и есть "истина" где/что заспавнилось
+    // ✅ истина о спавне
     const spawn = spawnTile(afterGrid, rng);
 
     const nextScore = score + gained;
     const nextMoves = moves + 1;
     const nextRngIndex = rng.getIndex();
     const nextState = { grid: afterGrid };
-
-    const prevActions = Array.isArray(run.actions) ? run.actions : [];
-    let nextActions = [...prevActions, { t: new Date().toISOString(), dir, gained }];
-    if (nextActions.length > ACTIONS_LIMIT) nextActions = nextActions.slice(-ACTIONS_LIMIT);
 
     const stillCanMove = canMove(afterGrid);
     const nextStatus = stillCanMove ? "active" : "finished";
@@ -802,7 +792,6 @@ router.post("/run/move", async (req, res) => {
           rng_index: nextRngIndex,
           moves: nextMoves,
           current_score: nextScore,
-          actions: nextActions,
           status: "active",
           updated_at: nowIso,
         })
@@ -817,7 +806,7 @@ router.post("/run/move", async (req, res) => {
         ok: true,
         moved: true,
         gained,
-        spawn, // ✅ добавили
+        spawn,
         run: {
           id: run.id,
           user_id: run.user_id,
@@ -844,7 +833,6 @@ router.post("/run/move", async (req, res) => {
         rng_index: nextRngIndex,
         moves: nextMoves,
         current_score: nextScore,
-        actions: nextActions,
         status: "finished",
         updated_at: nowIso,
       })
@@ -863,7 +851,7 @@ router.post("/run/move", async (req, res) => {
       ok: true,
       moved: true,
       gained,
-      spawn, // ✅ добавили
+      spawn,
       finished: true,
       reason: "no_moves",
       run: out.run,
