@@ -20,6 +20,7 @@ import inventoryRoutes from "./routes/inventoryRoutes.js";
 import slotsRoutes from "./routes/slots.js";           // ✅ новые
 import slotAdminRoutes from "./routes/slotAdmin.js";   // ✅ новые
 import game2048Routes from "./routes/game2048.js";
+import game2048LeaderboardRoutes from "./routes/game2048Leaderboard.js";
 
 // --- фоновые задачи ---
 import './checkTonTransactions.js';
@@ -163,7 +164,7 @@ app.post('/auth/telegram', async (req, res) => {
 });
 
 // --- приватная зона (требует JWT) ---
-app.use(['/wheel', '/payments', '/inventory', '/users', '/gifts', '/game'], requireJwt());
+app.use(['/wheel', '/payments', '/inventory', '/users', '/gifts', '/game', '/game2048'], requireJwt());
 
 // --- Роуты API ---
 app.use('/users', usersRouter);
@@ -175,6 +176,7 @@ app.use("/api", caseChanceRoutes);
 app.use("/api", caseSpinRoutes);
 app.use("/api", inventoryRoutes);
 app.use("/game", game2048Routes);
+
 
 // ✅ новые роуты слотов
 app.use("/api", slotsRoutes);
