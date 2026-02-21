@@ -176,6 +176,7 @@ app.use("/api", caseChanceRoutes);
 app.use("/api", caseSpinRoutes);
 app.use("/api", inventoryRoutes);
 app.use("/game", game2048Routes);
+app.use("/game2048", game2048LeaderboardRoutes);
 
 
 // ✅ новые роуты слотов
