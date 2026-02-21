@@ -652,11 +652,16 @@ router.post("/run/move", async (req, res) => {
   const tgId = getTelegramId(req);
   if (!tgId) return res.status(401).json({ ok: false, error: "Unauthorized" });
 
+  const t0 = Date.now();
+  const mark = (label) => console.log(`[2048/move] ${label} +${Date.now() - t0}ms tg=${tgId}`);
+  mark("start");
+
   const dirRaw = req?.body?.dir;
   const dir = typeof dirRaw === "string" ? dirRaw.toLowerCase() : "";
   const allowed = new Set(["up", "down", "left", "right"]);
 
   if (!allowed.has(dir)) {
+    mark("invalid dir");
     return res.status(400).json({ ok: false, error: "Invalid dir. Use up/down/left/right" });
   }
 
@@ -667,13 +672,14 @@ router.post("/run/move", async (req, res) => {
       .eq("telegram_id", tgId)
       .maybeSingle();
 
+    mark("after users select");
+
     if (uErr) {
       console.error("[2048/move] users select error:", uErr.message);
       return res.status(500).json({ ok: false, error: "DB error (users)" });
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    // ✅ больше не селектим actions
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
       .select(RUN_SELECT_CLIENT)
@@ -681,6 +687,8 @@ router.post("/run/move", async (req, res) => {
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1);
+
+    mark("after run select");
 
     if (aErr) {
       console.error("[2048/move] game_runs select active error:", aErr.message);
@@ -704,7 +712,6 @@ router.post("/run/move", async (req, res) => {
       rngIndex = init.rng_index;
     }
 
-    // период-чек: раз в 8 ходов, а не каждый
     if (moves % 8 === 0) {
       try {
         const { data: period, error: pErr } = await supabase
@@ -712,6 +719,8 @@ router.post("/run/move", async (req, res) => {
           .select("id,status,freeze_at,end_at")
           .eq("id", run.period_id)
           .maybeSingle();
+
+        mark("after period check");
 
         if (!pErr && period) {
           const now = new Date();
@@ -726,6 +735,7 @@ router.post("/run/move", async (req, res) => {
 
           if (shouldForceFinish) {
             const out = await finalizeRun({ run, reason: "period_end" });
+            mark("return period_end");
             return res.status(423).json({
               ok: true,
               finished: true,
@@ -744,7 +754,10 @@ router.post("/run/move", async (req, res) => {
     const beforeGrid = st.grid;
     const { grid: movedGrid, gained, moved } = applyMove(beforeGrid, dir);
 
+    mark("after applyMove");
+
     if (!moved) {
+      mark("return not moved");
       return res.json({
         ok: true,
         moved: false,
@@ -771,8 +784,9 @@ router.post("/run/move", async (req, res) => {
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
 
-    // ✅ истина о спавне
     const spawn = spawnTile(afterGrid, rng);
+
+    mark("after spawnTile");
 
     const nextScore = score + gained;
     const nextMoves = moves + 1;
@@ -783,8 +797,8 @@ router.post("/run/move", async (req, res) => {
     const nextStatus = stillCanMove ? "active" : "finished";
     const nowIso = new Date().toISOString();
 
-    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
+      mark("before run update");
       const { error: upErr } = await supabase
         .from("game_runs")
         .update({
@@ -796,12 +810,14 @@ router.post("/run/move", async (req, res) => {
           updated_at: nowIso,
         })
         .eq("id", run.id);
+      mark("after run update");
 
       if (upErr) {
         console.error("[2048/move] game_runs update error:", upErr.message);
         return res.status(500).json({ ok: false, error: "DB error (update run)" });
       }
 
+      mark("return active");
       return res.json({
         ok: true,
         moved: true,
@@ -825,7 +841,7 @@ router.post("/run/move", async (req, res) => {
       });
     }
 
-    // game over: тут нужно вернуть актуальный run и сделать finalize
+    mark("before finish update");
     const { data: updatedRun, error: upErr2 } = await supabase
       .from("game_runs")
       .update({
@@ -839,6 +855,7 @@ router.post("/run/move", async (req, res) => {
       .eq("id", run.id)
       .select(RUN_SELECT_CLIENT)
       .single();
+    mark("after finish update");
 
     if (upErr2) {
       console.error("[2048/move] game_runs update error:", upErr2.message);
@@ -847,6 +864,7 @@ router.post("/run/move", async (req, res) => {
 
     const out = await finalizeRun({ run: updatedRun, reason: "no_moves" });
 
+    mark("return finished");
     return res.json({
       ok: true,
       moved: true,
