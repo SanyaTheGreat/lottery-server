@@ -13,6 +13,32 @@ function getTelegramId(req) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * ✅ Cache: tgId -> userId (TTL)
+ * Цель: убрать users select на каждом /move.
+ * Примечание: кеш сбросится при рестарте инстанса Render — это ок.
+ */
+const USER_ID_CACHE = new Map(); // tgId -> { id, exp }
+const USER_ID_TTL_MS = 10 * 60 * 1000; // 10 минут
+
+async function getUserIdCached(tgId) {
+  const now = Date.now();
+  const cached = USER_ID_CACHE.get(tgId);
+  if (cached && cached.exp > now) return cached.id;
+
+  const { data: user, error } = await supabase
+    .from("users")
+    .select("id")
+    .eq("telegram_id", tgId)
+    .maybeSingle();
+
+  if (error) throw new Error(`users select failed: ${error.message}`);
+  if (!user?.id) return null;
+
+  USER_ID_CACHE.set(tgId, { id: user.id, exp: now + USER_ID_TTL_MS });
+  return user.id;
+}
+
 function utcDateString(d = new Date()) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -601,22 +627,13 @@ router.post("/run/finish", async (req, res) => {
   try {
     console.log(`[2048/finish] tg=${tgId} reason=${finalReason}`);
 
-    const { data: user, error: uErr } = await supabase
-      .from("users")
-      .select("id")
-      .eq("telegram_id", tgId)
-      .maybeSingle();
-
-    if (uErr) {
-      console.error("[2048/finish] users select error:", uErr.message);
-      return res.status(500).json({ ok: false, error: "DB error (users)" });
-    }
-    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+    const userId = await getUserIdCached(tgId);
+    if (!userId) return res.status(404).json({ ok: false, error: "User not found" });
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
       .select(RUN_SELECT_CLIENT)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1);
@@ -666,24 +683,14 @@ router.post("/run/move", async (req, res) => {
   }
 
   try {
-    const { data: user, error: uErr } = await supabase
-      .from("users")
-      .select("id")
-      .eq("telegram_id", tgId)
-      .maybeSingle();
-
-    mark("after users select");
-
-    if (uErr) {
-      console.error("[2048/move] users select error:", uErr.message);
-      return res.status(500).json({ ok: false, error: "DB error (users)" });
-    }
-    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+    const userId = await getUserIdCached(tgId);
+    mark("after users cache");
+    if (!userId) return res.status(404).json({ ok: false, error: "User not found" });
 
     const { data: activeRuns, error: aErr } = await supabase
       .from("game_runs")
       .select(RUN_SELECT_CLIENT)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1);
@@ -712,6 +719,7 @@ router.post("/run/move", async (req, res) => {
       rngIndex = init.rng_index;
     }
 
+    // период-чек: раз в 8 ходов, а не каждый
     if (moves % 8 === 0) {
       try {
         const { data: period, error: pErr } = await supabase
@@ -784,6 +792,7 @@ router.post("/run/move", async (req, res) => {
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
 
+    // ✅ истина о спавне
     const spawn = spawnTile(afterGrid, rng);
 
     mark("after spawnTile");
@@ -797,8 +806,10 @@ router.post("/run/move", async (req, res) => {
     const nextStatus = stillCanMove ? "active" : "finished";
     const nowIso = new Date().toISOString();
 
+    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
       mark("before run update");
+
       const { error: upErr } = await supabase
         .from("game_runs")
         .update({
@@ -810,6 +821,7 @@ router.post("/run/move", async (req, res) => {
           updated_at: nowIso,
         })
         .eq("id", run.id);
+
       mark("after run update");
 
       if (upErr) {
@@ -841,7 +853,9 @@ router.post("/run/move", async (req, res) => {
       });
     }
 
+    // game over: тут нужно вернуть актуальный run и сделать finalize
     mark("before finish update");
+
     const { data: updatedRun, error: upErr2 } = await supabase
       .from("game_runs")
       .update({
@@ -855,6 +869,7 @@ router.post("/run/move", async (req, res) => {
       .eq("id", run.id)
       .select(RUN_SELECT_CLIENT)
       .single();
+
     mark("after finish update");
 
     if (upErr2) {
