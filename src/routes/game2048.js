@@ -84,6 +84,11 @@ const LEADERBOARD_TABLE = "weekly_scores"; // <-- если у тебя друг�
 const RUN_SELECT_CLIENT =
   "id,user_id,period_id,seed,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
 
+// для undo (нужно только в /undo)
+const RUN_SELECT_WITH_UNDO =
+  RUN_SELECT_CLIENT +
+  ",prev_state,prev_rng_index,prev_moves,prev_current_score,prev_status,prev_finished_reason,prev_finished_at,undo_available";
+
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
   let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
@@ -558,6 +563,15 @@ router.post("/run/start", async (req, res) => {
         rng_index: init.rng_index,
         moves: 0,
         current_score: 0,
+        // undo init
+        undo_available: false,
+        prev_state: null,
+        prev_rng_index: null,
+        prev_moves: null,
+        prev_current_score: null,
+        prev_status: null,
+        prev_finished_reason: null,
+        prev_finished_at: null,
         updated_at: new Date().toISOString(),
       })
       .select(RUN_SELECT_CLIENT)
@@ -658,6 +672,107 @@ router.post("/run/finish", async (req, res) => {
     });
   } catch (e) {
     console.error("[2048/finish] unexpected:", e);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+/**
+ * POST /game/run/undo
+ * Undo на 1 шаг назад (без увеличения времени /move: snapshot пишется в тот же update)
+ */
+router.post("/run/undo", async (req, res) => {
+  const tgId = getTelegramId(req);
+  if (!tgId) return res.status(401).json({ ok: false, error: "Unauthorized" });
+
+  const t0 = Date.now();
+  const mark = (label) => console.log(`[2048/undo] ${label} +${Date.now() - t0}ms tg=${tgId}`);
+  mark("start");
+
+  try {
+    const userId = await getUserIdCached(tgId);
+    mark("after users cache");
+    if (!userId) return res.status(404).json({ ok: false, error: "User not found" });
+
+    const { data: runs, error: rErr } = await supabase
+      .from("game_runs")
+      .select(RUN_SELECT_WITH_UNDO)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    mark("after run select");
+
+    if (rErr) {
+      console.error("[2048/undo] run select error:", rErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (run select)" });
+    }
+    if (!runs?.length) return res.status(409).json({ ok: false, error: "No run found" });
+
+    const run = runs[0];
+
+    if (!run.undo_available || !run.prev_state) {
+      return res.status(409).json({ ok: false, error: "Undo not available" });
+    }
+
+    const restoredState = run.prev_state;
+    const restoredRng = Number(run.prev_rng_index ?? 0);
+    const restoredMoves = Number(run.prev_moves ?? 0);
+    const restoredScore = Number(run.prev_current_score ?? 0);
+    const restoredStatus = run.prev_status ?? "active";
+    const restoredReason = run.prev_finished_reason ?? null;
+    const restoredFinishedAt = run.prev_finished_at ?? null;
+
+    const nowIso = new Date().toISOString();
+
+    mark("before undo update");
+
+    const { error: upErr } = await supabase
+      .from("game_runs")
+      .update({
+        state: restoredState,
+        rng_index: restoredRng,
+        moves: restoredMoves,
+        current_score: restoredScore,
+        status: restoredStatus,
+        finished_reason: restoredReason,
+        finished_at: restoredFinishedAt,
+
+        // одноразовый undo (чтобы не было бесконечного туда-сюда)
+        undo_available: false,
+
+        updated_at: nowIso,
+      })
+      .eq("id", run.id);
+
+    mark("after undo update");
+
+    if (upErr) {
+      console.error("[2048/undo] run undo update error:", upErr.message);
+      return res.status(500).json({ ok: false, error: "DB error (undo update)" });
+    }
+
+    mark("return ok");
+    return res.json({
+      ok: true,
+      undone: true,
+      run: {
+        id: run.id,
+        user_id: run.user_id,
+        period_id: run.period_id,
+        seed: run.seed,
+        state: restoredState,
+        rng_index: restoredRng,
+        moves: restoredMoves,
+        current_score: restoredScore,
+        status: restoredStatus,
+        finished_reason: restoredReason,
+        finished_at: restoredFinishedAt,
+        created_at: run.created_at,
+        updated_at: nowIso,
+      },
+    });
+  } catch (e) {
+    console.error("[2048/undo] unexpected:", e);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
@@ -806,6 +921,18 @@ router.post("/run/move", async (req, res) => {
     const nextStatus = stillCanMove ? "active" : "finished";
     const nowIso = new Date().toISOString();
 
+    // snapshot для undo (что было ДО хода)
+    const undoSnapshot = {
+      prev_state: st,
+      prev_rng_index: rngIndex,
+      prev_moves: moves,
+      prev_current_score: score,
+      prev_status: run.status,
+      prev_finished_reason: run.finished_reason,
+      prev_finished_at: run.finished_at,
+      undo_available: true,
+    };
+
     // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
       mark("before run update");
@@ -813,11 +940,15 @@ router.post("/run/move", async (req, res) => {
       const { error: upErr } = await supabase
         .from("game_runs")
         .update({
+          ...undoSnapshot,
+
           state: nextState,
           rng_index: nextRngIndex,
           moves: nextMoves,
           current_score: nextScore,
           status: "active",
+          finished_reason: null,
+          finished_at: null,
           updated_at: nowIso,
         })
         .eq("id", run.id);
@@ -835,6 +966,7 @@ router.post("/run/move", async (req, res) => {
         moved: true,
         gained,
         spawn,
+        undo_available: true,
         run: {
           id: run.id,
           user_id: run.user_id,
@@ -859,6 +991,8 @@ router.post("/run/move", async (req, res) => {
     const { data: updatedRun, error: upErr2 } = await supabase
       .from("game_runs")
       .update({
+        ...undoSnapshot,
+
         state: nextState,
         rng_index: nextRngIndex,
         moves: nextMoves,
@@ -885,6 +1019,7 @@ router.post("/run/move", async (req, res) => {
       moved: true,
       gained,
       spawn,
+      undo_available: true,
       finished: true,
       reason: "no_moves",
       run: out.run,
