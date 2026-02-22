@@ -834,7 +834,45 @@ router.post("/run/move", async (req, res) => {
       rngIndex = init.rng_index;
     }
 
-    // ✅ ВАЖНО: period-check из /move убран (финалайзер сам завершает активные игры в БД)
+    // период-чек: раз в 8 ходов, а не каждый
+    if (moves % 8 === 0) {
+      try {
+        const { data: period, error: pErr } = await supabase
+          .from("weekly_periods")
+          .select("id,status,freeze_at,end_at")
+          .eq("id", run.period_id)
+          .maybeSingle();
+
+        mark("after period check");
+
+        if (!pErr && period) {
+          const now = new Date();
+          const freezeAt = period.freeze_at ? new Date(period.freeze_at) : null;
+          const endAt = period.end_at ? new Date(period.end_at) : null;
+
+          const shouldForceFinish =
+            (endAt && now >= endAt) ||
+            (freezeAt && now >= freezeAt) ||
+            period.status === "frozen" ||
+            period.status === "closed";
+
+          if (shouldForceFinish) {
+            const out = await finalizeRun({ run, reason: "period_end" });
+            mark("return period_end");
+            return res.status(423).json({
+              ok: true,
+              finished: true,
+              reason: "period_end",
+              run: out.run,
+              leaderboard: out.leaderboard,
+              error: "Season is frozen/ended. Run finished.",
+            });
+          }
+        }
+      } catch (e) {
+        console.error("[2048/move] period check error:", e?.message || e);
+      }
+    }
 
     const beforeGrid = st.grid;
     const { grid: movedGrid, gained, moved } = applyMove(beforeGrid, dir);
@@ -895,11 +933,11 @@ router.post("/run/move", async (req, res) => {
       undo_available: true,
     };
 
-    // ⚡ FAST PATH: обычный ход — update БЕЗ тяжёлого select, но с защитой от гонки с финалайзером
+    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
       mark("before run update");
 
-      const { data: upd, error: upErr } = await supabase
+      const { error: upErr } = await supabase
         .from("game_runs")
         .update({
           ...undoSnapshot,
@@ -913,27 +951,13 @@ router.post("/run/move", async (req, res) => {
           finished_at: null,
           updated_at: nowIso,
         })
-        .eq("id", run.id)
-        .eq("status", "active") // ✅ anti-race: если финалайзер уже завершил — не перезаписываем
-        .select("id")
-        .maybeSingle();
+        .eq("id", run.id);
 
       mark("after run update");
 
       if (upErr) {
         console.error("[2048/move] game_runs update error:", upErr.message);
         return res.status(500).json({ ok: false, error: "DB error (update run)" });
-      }
-
-      if (!upd?.id) {
-        // финалайзер/ролловер успел завершить ран
-        mark("return period_end (race)");
-        return res.status(423).json({
-          ok: true,
-          finished: true,
-          reason: "period_end",
-          error: "Season ended/frozen. Run finished.",
-        });
       }
 
       mark("return active");
@@ -977,26 +1001,14 @@ router.post("/run/move", async (req, res) => {
         updated_at: nowIso,
       })
       .eq("id", run.id)
-      .eq("status", "active") // ✅ anti-race
       .select(RUN_SELECT_CLIENT)
-      .maybeSingle();
+      .single();
 
     mark("after finish update");
 
     if (upErr2) {
-      console.error("[2048/move] game_runs finish update error:", upErr2.message);
+      console.error("[2048/move] game_runs update error:", upErr2.message);
       return res.status(500).json({ ok: false, error: "DB error (finish run)" });
-    }
-
-    if (!updatedRun) {
-      // финалайзер/ролловер успел завершить ран
-      mark("return period_end (race finish)");
-      return res.status(423).json({
-        ok: true,
-        finished: true,
-        reason: "period_end",
-        error: "Season ended/frozen. Run finished.",
-      });
     }
 
     const out = await finalizeRun({ run: updatedRun, reason: "no_moves" });
