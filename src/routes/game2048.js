@@ -1,3 +1,4 @@
+// routes/game2048.js
 import express from "express";
 import crypto from "crypto";
 import { supabase } from "../services/supabaseClient.js";
@@ -88,6 +89,10 @@ const RUN_SELECT_CLIENT =
 const RUN_SELECT_WITH_UNDO =
   RUN_SELECT_CLIENT +
   ",prev_state,prev_rng_index,prev_moves,prev_current_score,prev_status,prev_finished_reason,prev_finished_at,undo_available";
+
+// --- DUROV prank settings ---
+const DUROV_CHANCE = 0.08; // 0.05–0.12
+const DUROV_COOLDOWN_MOVES = 5; // 4–7
 
 // splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
 function splitmix64(x) {
@@ -249,6 +254,7 @@ function canMove(grid) {
   return false;
 }
 
+// ✅ сохраняем доп. поля state (например durov), но валидируем grid
 function normalizeState(state) {
   const grid = state?.grid;
   if (!Array.isArray(grid) || grid.length !== GRID_SIZE) return null;
@@ -258,7 +264,7 @@ function normalizeState(state) {
       if (typeof v !== "number") return null;
     }
   }
-  return { grid };
+  return { ...state, grid };
 }
 
 function initStateForNewRun(seedStr) {
@@ -267,7 +273,7 @@ function initStateForNewRun(seedStr) {
   spawnTile(grid, rng);
   spawnTile(grid, rng);
   return {
-    state: { grid },
+    state: { grid, durov: { cooldown: 0 } },
     rng_index: rng.getIndex(),
   };
 }
@@ -422,6 +428,40 @@ async function finalizeRun({ run, reason }) {
     .maybeSingle();
 
   return { run, leaderboard: lbSame ?? null };
+}
+
+// --- DUROV prank helpers (swap only among non-empty) ---
+function pickNonEmptyCells(grid) {
+  const cells = [];
+  for (let r = 0; r < GRID_SIZE; r++) {
+    for (let c = 0; c < GRID_SIZE; c++) {
+      if (grid[r][c] !== 0) cells.push([r, c]);
+    }
+  }
+  return cells;
+}
+
+function durovSwap(grid, rng) {
+  const filled = pickNonEmptyCells(grid);
+  if (filled.length < 2) return null;
+
+  const i1 = Math.floor(rng.next01() * filled.length);
+  let i2 = Math.floor(rng.next01() * (filled.length - 1));
+  if (i2 >= i1) i2 += 1;
+
+  const [r1, c1] = filled[i1];
+  const [r2, c2] = filled[i2];
+
+  const a = grid[r1][c1];
+  const b = grid[r2][c2];
+  grid[r1][c1] = b;
+  grid[r2][c2] = a;
+
+  return {
+    type: "durov_swap",
+    from: { r: r1, c: c1, v: a },
+    to: { r: r2, c: c2, v: b },
+  };
 }
 
 /**
@@ -886,6 +926,7 @@ router.post("/run/move", async (req, res) => {
         moved: false,
         gained: 0,
         spawn: null,
+        durov_event: null,
         run: {
           id: run.id,
           user_id: run.user_id,
@@ -912,10 +953,31 @@ router.post("/run/move", async (req, res) => {
 
     mark("after spawnTile");
 
+    // --- DUROV prank (swap among non-empty, cooldown) ---
+    let durov_event = null;
+
+    const prevDurov = st.durov && typeof st.durov === "object" ? st.durov : { cooldown: 0 };
+    let durovCooldown = Number(prevDurov.cooldown ?? 0);
+    if (!Number.isFinite(durovCooldown) || durovCooldown < 0) durovCooldown = 0;
+
+    durovCooldown = Math.max(0, durovCooldown - 1);
+
+    if (durovCooldown === 0) {
+      if (rng.next01() < DUROV_CHANCE) {
+        durov_event = durovSwap(afterGrid, rng);
+        if (durov_event) durovCooldown = DUROV_COOLDOWN_MOVES;
+      }
+    }
+
     const nextScore = score + gained;
     const nextMoves = moves + 1;
     const nextRngIndex = rng.getIndex();
-    const nextState = { grid: afterGrid };
+
+    const nextState = {
+      ...st,
+      grid: afterGrid,
+      durov: { cooldown: durovCooldown },
+    };
 
     const stillCanMove = canMove(afterGrid);
     const nextStatus = stillCanMove ? "active" : "finished";
@@ -966,6 +1028,7 @@ router.post("/run/move", async (req, res) => {
         moved: true,
         gained,
         spawn,
+        durov_event,
         undo_available: true,
         run: {
           id: run.id,
@@ -1019,6 +1082,7 @@ router.post("/run/move", async (req, res) => {
       moved: true,
       gained,
       spawn,
+      durov_event,
       undo_available: true,
       finished: true,
       reason: "no_moves",
