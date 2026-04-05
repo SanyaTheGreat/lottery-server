@@ -1,11 +1,8 @@
-// src/controllers/telegram/webhook.js
 import { supabase } from "../../services/supabaseClient.js";
 
-const BOT_TOKEN  = process.env.BOT_TOKEN;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app";
-const GEM_KEY    = process.env.GEM_KEY; // 🔐 секрет для Telegram webhook
-
-// ----- helpers ----------------------------------------------------
+const GEM_KEY = process.env.GEM_KEY;
 
 async function tg(method, payload) {
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/${method}`;
@@ -27,7 +24,6 @@ async function answerPreCheckoutQuery(id, ok = true, error_message) {
   return tg("answerPreCheckoutQuery", body);
 }
 
-// округление ВНИЗ к 0.1, но безопасно через целые десятые
 function floorToTenthsInt(value) {
   return Math.floor((Number(value) + 1e-9) * 10);
 }
@@ -46,11 +42,8 @@ async function getFx() {
   return data;
 }
 
-// ----- main handler -----------------------------------------------
-
 export default async function telegramWebhook(req, res) {
   try {
-    // ✅ Проверка Telegram secret (GEM_KEY)
     if (GEM_KEY) {
       const headerSecret = req.headers["x-telegram-bot-api-secret-token"];
       if (!headerSecret || headerSecret !== GEM_KEY) {
@@ -61,7 +54,6 @@ export default async function telegramWebhook(req, res) {
 
     const upd = req.body;
 
-    // 1️⃣ Подтверждение перед оплатой (pre_checkout_query)
     if (upd?.pre_checkout_query) {
       await answerPreCheckoutQuery(upd.pre_checkout_query.id, true);
       return res.sendStatus(200);
@@ -69,7 +61,6 @@ export default async function telegramWebhook(req, res) {
 
     const msg = upd?.message || upd?.edited_message;
 
-    // 2️⃣ /start — кнопка открытия Mini App
     if (msg?.text?.startsWith("/start")) {
       const user = msg.from;
       const parts = msg.text.trim().split(/\s+/, 2);
@@ -82,9 +73,7 @@ export default async function telegramWebhook(req, res) {
 
       const url = `${WEBAPP_URL.replace(/\/$/, "")}/?${search.toString()}`;
       const reply_markup = {
-        inline_keyboard: [[
-          { text: "🚀 Открыть приложение", web_app: { url } }
-        ]]
+        inline_keyboard: [[{ text: "🚀 Открыть приложение", web_app: { url } }]],
       };
 
       await sendMessage(
@@ -96,23 +85,101 @@ export default async function telegramWebhook(req, res) {
       return res.sendStatus(200);
     }
 
-    // 3️⃣ Успешная оплата Stars → начисляем билеты (1 TON = 1 ticket)
     const sp = msg?.successful_payment;
     if (sp) {
+      const rawPayload = String(sp.invoice_payload || "");
+      console.log("[tg-payments] successful_payment payload:", rawPayload);
+
+      // --------------------------------------------------
+      // UNDO PAYMENT
+      // --------------------------------------------------
+      if (rawPayload.startsWith("undo:")) {
+        const paymentId = Number(rawPayload.split(":")[1]);
+
+        if (!Number.isFinite(paymentId) || paymentId <= 0) {
+          console.error("[tg-payments] invalid undo payment id:", rawPayload);
+          return res.sendStatus(200);
+        }
+
+        const { data: payment, error: paymentErr } = await supabase
+          .from("undo_payments")
+          .select("*")
+          .eq("id", paymentId)
+          .maybeSingle();
+
+        if (paymentErr) {
+          console.error("[tg-payments] select undo payment error:", paymentErr);
+          return res.sendStatus(200);
+        }
+
+        if (!payment) {
+          console.error("[tg-payments] undo payment not found:", paymentId);
+          return res.sendStatus(200);
+        }
+
+        if (payment.status === "paid" || payment.status === "consumed") {
+          console.log("[tg-payments] undo payment already processed:", paymentId);
+          return res.sendStatus(200);
+        }
+
+        if (sp.currency !== "XTR") {
+          console.error("[tg-payments] invalid undo currency:", sp.currency);
+          return res.sendStatus(200);
+        }
+
+        if (Number(sp.total_amount) !== Number(payment.price)) {
+          console.error("[tg-payments] undo amount mismatch:", {
+            expected: Number(payment.price),
+            actual: Number(sp.total_amount),
+            paymentId,
+          });
+          return res.sendStatus(200);
+        }
+
+        const { error: updateErr } = await supabase
+          .from("undo_payments")
+          .update({
+            status: "paid",
+            telegram_payment_charge_id: sp.telegram_payment_charge_id || null,
+            provider_payment_charge_id: sp.provider_payment_charge_id || null,
+          })
+          .eq("id", paymentId)
+          .eq("status", "pending");
+
+        if (updateErr) {
+          console.error("[tg-payments] update undo payment error:", updateErr);
+          return res.sendStatus(200);
+        }
+
+        console.log("[tg-payments] undo payment marked paid:", {
+          payment_id: payment.id,
+          run_id: payment.run_id,
+          user_id: payment.user_id,
+          telegram_id: payment.telegram_id,
+          undo_used_count: payment.undo_used_count,
+          price: payment.price,
+        });
+
+        return res.sendStatus(200);
+      }
+
+      // --------------------------------------------------
+      // TOPUP PAYMENT
+      // --------------------------------------------------
       const telegram_id = msg.from.id;
-      const stars_paid  = sp.total_amount;
+      const stars_paid = sp.total_amount;
       const tx_id = sp.telegram_payment_charge_id || sp.provider_payment_charge_id;
 
-      // идемпотентность: уже был этот tx_id?
       const { data: exists } = await supabase
         .from("sells")
         .select("id")
         .eq("tx_id", tx_id)
         .maybeSingle();
+
       if (exists) return res.sendStatus(200);
 
       const { ton_per_100stars, fee_markup } = await getFx();
-      const ton_per_star  = Number(ton_per_100stars) / 100;
+      const ton_per_star = Number(ton_per_100stars) / 100;
       const netMultiplier = 1 - Number(fee_markup);
 
       const tickets_raw = Number(stars_paid) * ton_per_star * netMultiplier;
@@ -127,10 +194,9 @@ export default async function telegramWebhook(req, res) {
         rate_at: ton_per_100stars,
         tx_id,
         status: "paid",
-        payload: JSON.stringify({ currency: sp.currency })
+        payload: JSON.stringify({ currency: sp.currency, invoice_payload: rawPayload }),
       });
 
-      // начисляем пользователю
       const { data: user } = await supabase
         .from("users")
         .select("id, tickets")
@@ -145,7 +211,7 @@ export default async function telegramWebhook(req, res) {
       } else {
         await supabase.from("users").insert({
           telegram_id,
-          tickets: Number(delta.toFixed(2))
+          tickets: Number(delta.toFixed(2)),
         });
       }
 
@@ -157,7 +223,6 @@ export default async function telegramWebhook(req, res) {
       return res.sendStatus(200);
     }
 
-    // 4️⃣ Остальные апдейты пропускаем
     return res.sendStatus(200);
   } catch (err) {
     console.error("❌ Telegram webhook error:", err);
