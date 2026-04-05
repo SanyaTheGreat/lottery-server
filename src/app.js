@@ -21,6 +21,8 @@ import slotsRoutes from "./routes/slots.js";           // ✅ новые
 import slotAdminRoutes from "./routes/slotAdmin.js";   // ✅ новые
 import game2048Routes from "./routes/game2048.js";
 import game2048LeaderboardRoutes from "./routes/game2048Leaderboard.js";
+import telegramPaymentsWebhook from "./routes/telegramPaymentsWebhook.js";
+
 
 // --- фоновые задачи ---
 import './checkTonTransactions.js';
@@ -195,6 +197,7 @@ app.use("/api", caseSpinRoutes);
 app.use("/api", inventoryRoutes);
 app.use("/game", game2048Routes);
 app.use("/game2048", game2048LeaderboardRoutes);
+app.use("/telegram/payments", telegramPaymentsWebhook);
 
 
 // ✅ новые роуты слотов

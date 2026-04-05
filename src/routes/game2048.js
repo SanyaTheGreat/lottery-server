@@ -16,11 +16,9 @@ function getTelegramId(req) {
 
 /**
  * ✅ Cache: tgId -> userId (TTL)
- * Цель: убрать users select на каждом /move.
- * Примечание: кеш сбросится при рестарте инстанса Render — это ок.
  */
-const USER_ID_CACHE = new Map(); // tgId -> { id, exp }
-const USER_ID_TTL_MS = 10 * 60 * 1000; // 10 минут
+const USER_ID_CACHE = new Map();
+const USER_ID_TTL_MS = 10 * 60 * 1000;
 
 async function getUserIdCached(tgId) {
   const now = Date.now();
@@ -65,7 +63,6 @@ function computePeriodBoundsUTC(now = new Date()) {
 
 /**
  * FIX: crypto.randomInt() имеет лимит по диапазону.
- * Генерим seed через randomBytes (64-bit), возвращаем строкой под bigint в БД.
  */
 function randomSeedBigintString() {
   const buf = crypto.randomBytes(8);
@@ -73,28 +70,74 @@ function randomSeedBigintString() {
   return n.toString();
 }
 
-/**
- * --- 2048 helpers (детерминированный RNG + логика движения) ---
- */
 const GRID_SIZE = 4;
 
 const FINISH_REASONS = new Set(["no_moves", "manual", "period_end"]);
-const LEADERBOARD_TABLE = "weekly_scores"; // <-- если у тебя другое имя таблицы — поменяй тут
+const LEADERBOARD_TABLE = "weekly_scores";
 
-// ⚡ Селекты: клиенту actions не нужны
 const RUN_SELECT_CLIENT =
-  "id,user_id,period_id,seed,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at";
+  "id,user_id,period_id,seed,state,rng_index,moves,current_score,status,finished_reason,finished_at,created_at,updated_at,undo_used_count";
 
-// для undo (нужно только в /undo)
 const RUN_SELECT_WITH_UNDO =
   RUN_SELECT_CLIENT +
   ",prev_state,prev_rng_index,prev_moves,prev_current_score,prev_status,prev_finished_reason,prev_finished_at,undo_available";
 
-// --- DUROV prank settings ---
-const DUROV_CHANCE = 0.08; // 0.05–0.12
-const DUROV_COOLDOWN_MOVES = 5; // 4–7
+const DUROV_CHANCE = 0.08;
+const DUROV_COOLDOWN_MOVES = 5;
 
-// splitmix64 — хорош для детерминированных псевдослучайных чисел от seed+idx
+function getUndoPrice(undoUsedCount) {
+  const n = Number(undoUsedCount ?? 0);
+  if (n <= 0) return 0;
+  if (n === 1) return 10;
+  if (n === 2) return 50;
+  if (n === 3) return 100;
+  return 1000;
+}
+
+function withUndoMeta(run) {
+  if (!run) return run;
+  const undoUsedCount = Number(run.undo_used_count ?? 0);
+  return {
+    ...run,
+    undo_used_count: undoUsedCount,
+    undo_next_price: getUndoPrice(undoUsedCount),
+  };
+}
+
+async function findPaidUndo({ runId, userId, undoUsedCount }) {
+  const { data, error } = await supabase
+    .from("undo_payments")
+    .select("id,status,price,undo_used_count,created_at")
+    .eq("run_id", runId)
+    .eq("user_id", userId)
+    .eq("undo_used_count", undoUsedCount)
+    .eq("status", "paid")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`undo_payments select failed: ${error.message}`);
+  return data ?? null;
+}
+
+async function consumePaidUndo(paymentId) {
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("undo_payments")
+    .update({
+      status: "consumed",
+      consumed_at: nowIso,
+    })
+    .eq("id", paymentId)
+    .eq("status", "paid")
+    .select("id,status,consumed_at")
+    .maybeSingle();
+
+  if (error) throw new Error(`undo_payments consume failed: ${error.message}`);
+  return data ?? null;
+}
+
 function splitmix64(x) {
   let z = (x + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
   z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xffffffffffffffffn;
@@ -102,10 +145,9 @@ function splitmix64(x) {
   return (z ^ (z >> 31n)) & 0xffffffffffffffffn;
 }
 
-// [0,1) из 64-bit (берём 53 бита как в JS double)
 function rand01From64(u64) {
-  const v = Number((u64 >> 11n) & ((1n << 53n) - 1n)); // 53 bits
-  return v / 9007199254740992; // 2^53
+  const v = Number((u64 >> 11n) & ((1n << 53n) - 1n));
+  return v / 9007199254740992;
 }
 
 function makeRng(seedStr, startIndex = 0) {
@@ -151,10 +193,6 @@ function getEmptyCells(grid) {
   return cells;
 }
 
-/**
- * ✅ возвращаем инфу о спавне, чтобы фронт мог моментально показать
- * return: { r, c, v } | null
- */
 function spawnTile(grid, rng) {
   const empties = getEmptyCells(grid);
   if (empties.length === 0) return null;
@@ -254,7 +292,6 @@ function canMove(grid) {
   return false;
 }
 
-// ✅ сохраняем доп. поля state (например durov), но валидируем grid
 function normalizeState(state) {
   const grid = state?.grid;
   if (!Array.isArray(grid) || grid.length !== GRID_SIZE) return null;
@@ -278,9 +315,6 @@ function initStateForNewRun(seedStr) {
   };
 }
 
-/**
- * Достаём активный период. Если нет — создаём.
- */
 async function getOrCreateActivePeriod(now) {
   const { data: active, error: e1 } = await supabase
     .from("weekly_periods")
@@ -322,10 +356,6 @@ async function getOrCreateActivePeriod(now) {
   return created;
 }
 
-/**
- * Финишит ран и пушит best_score в лидерборд (по period_id+user_id), если score лучше.
- * reason: "no_moves" | "manual" | "period_end"
- */
 async function finalizeRun({ run, reason }) {
   const nowIso = new Date().toISOString();
   const finalScore = Number(run.current_score ?? 0);
@@ -375,7 +405,7 @@ async function finalizeRun({ run, reason }) {
 
   if (lbSelErr) {
     console.error("[2048/finalize] leaderboard select error:", lbSelErr.message);
-    return { run, leaderboard: null };
+    return { run: withUndoMeta(run), leaderboard: null };
   }
 
   const currentBest = Number(existingLb?.best_score ?? 0);
@@ -396,10 +426,10 @@ async function finalizeRun({ run, reason }) {
 
     if (lbInsErr) {
       console.error("[2048/finalize] leaderboard insert error:", lbInsErr.message);
-      return { run, leaderboard: null };
+      return { run: withUndoMeta(run), leaderboard: null };
     }
 
-    return { run, leaderboard: lbIns };
+    return { run: withUndoMeta(run), leaderboard: lbIns };
   }
 
   if (finalScore > currentBest) {
@@ -415,10 +445,10 @@ async function finalizeRun({ run, reason }) {
 
     if (lbUpdErr) {
       console.error("[2048/finalize] leaderboard update error:", lbUpdErr.message);
-      return { run, leaderboard: null };
+      return { run: withUndoMeta(run), leaderboard: null };
     }
 
-    return { run, leaderboard: lbUpd };
+    return { run: withUndoMeta(run), leaderboard: lbUpd };
   }
 
   const { data: lbSame } = await supabase
@@ -427,10 +457,9 @@ async function finalizeRun({ run, reason }) {
     .eq("id", existingLb.id)
     .maybeSingle();
 
-  return { run, leaderboard: lbSame ?? null };
+  return { run: withUndoMeta(run), leaderboard: lbSame ?? null };
 }
 
-// --- DUROV prank helpers (swap only among non-empty) ---
 function pickNonEmptyCells(grid) {
   const cells = [];
   for (let r = 0; r < GRID_SIZE; r++) {
@@ -550,7 +579,7 @@ router.post("/run/start", async (req, res) => {
         ok: true,
         mode: "resume",
         period,
-        run: activeRuns[0],
+        run: withUndoMeta(activeRuns[0]),
         attempts: {
           daily_day_utc: dailyDayUtc,
           daily_attempts_remaining: dailyAttempts,
@@ -603,7 +632,7 @@ router.post("/run/start", async (req, res) => {
         rng_index: init.rng_index,
         moves: 0,
         current_score: 0,
-        // undo init
+        undo_used_count: 0,
         undo_available: false,
         prev_state: null,
         prev_rng_index: null,
@@ -633,7 +662,7 @@ router.post("/run/start", async (req, res) => {
           ok: true,
           mode: "resume",
           period,
-          run: fallback[0],
+          run: withUndoMeta(fallback[0]),
           attempts: {
             daily_day_utc: dailyDayUtc,
             daily_attempts_remaining: dailyAttempts,
@@ -653,7 +682,7 @@ router.post("/run/start", async (req, res) => {
       mode: "new",
       used_from: usedFrom,
       period,
-      run: createdRun,
+      run: withUndoMeta(createdRun),
       attempts: {
         daily_day_utc: dailyDayUtc,
         daily_attempts_remaining: dailyAttempts,
@@ -718,7 +747,6 @@ router.post("/run/finish", async (req, res) => {
 
 /**
  * POST /game/run/undo
- * Undo на 1 шаг назад (без увеличения времени /move: snapshot пишется в тот же update)
  */
 router.post("/run/undo", async (req, res) => {
   const tgId = getTelegramId(req);
@@ -754,6 +782,31 @@ router.post("/run/undo", async (req, res) => {
       return res.status(409).json({ ok: false, error: "Undo not available" });
     }
 
+    const undoUsedCount = Number(run.undo_used_count ?? 0);
+    const price = getUndoPrice(undoUsedCount);
+
+    let paidUndo = null;
+
+    if (price > 0) {
+      paidUndo = await findPaidUndo({
+        runId: run.id,
+        userId: run.user_id,
+        undoUsedCount,
+      });
+
+      if (!paidUndo) {
+        return res.status(402).json({
+          ok: false,
+          need_payment: true,
+          error: "Undo payment required",
+          price,
+          run_id: run.id,
+          undo_used_count: undoUsedCount,
+          undo_next_price: price,
+        });
+      }
+    }
+
     const restoredState = run.prev_state;
     const restoredRng = Number(run.prev_rng_index ?? 0);
     const restoredMoves = Number(run.prev_moves ?? 0);
@@ -766,7 +819,7 @@ router.post("/run/undo", async (req, res) => {
 
     mark("before undo update");
 
-    const { error: upErr } = await supabase
+    const { data: updatedRun, error: upErr } = await supabase
       .from("game_runs")
       .update({
         state: restoredState,
@@ -776,13 +829,13 @@ router.post("/run/undo", async (req, res) => {
         status: restoredStatus,
         finished_reason: restoredReason,
         finished_at: restoredFinishedAt,
-
-        // одноразовый undo (чтобы не было бесконечного туда-сюда)
         undo_available: false,
-
+        undo_used_count: undoUsedCount + 1,
         updated_at: nowIso,
       })
-      .eq("id", run.id);
+      .eq("id", run.id)
+      .select(RUN_SELECT_CLIENT)
+      .single();
 
     mark("after undo update");
 
@@ -791,25 +844,22 @@ router.post("/run/undo", async (req, res) => {
       return res.status(500).json({ ok: false, error: "DB error (undo update)" });
     }
 
+    if (paidUndo?.id) {
+      try {
+        const consumed = await consumePaidUndo(paidUndo.id);
+        if (!consumed) {
+          console.warn("[2048/undo] paid undo was not consumed, maybe duplicate request", paidUndo.id);
+        }
+      } catch (e) {
+        console.error("[2048/undo] consume payment failed:", e);
+      }
+    }
+
     mark("return ok");
     return res.json({
       ok: true,
       undone: true,
-      run: {
-        id: run.id,
-        user_id: run.user_id,
-        period_id: run.period_id,
-        seed: run.seed,
-        state: restoredState,
-        rng_index: restoredRng,
-        moves: restoredMoves,
-        current_score: restoredScore,
-        status: restoredStatus,
-        finished_reason: restoredReason,
-        finished_at: restoredFinishedAt,
-        created_at: run.created_at,
-        updated_at: nowIso,
-      },
+      run: withUndoMeta(updatedRun),
     });
   } catch (e) {
     console.error("[2048/undo] unexpected:", e);
@@ -867,6 +917,7 @@ router.post("/run/move", async (req, res) => {
     let rngIndex = Number(run.rng_index ?? 0);
     const moves = Number(run.moves ?? 0);
     const score = Number(run.current_score ?? 0);
+    const undoUsedCount = Number(run.undo_used_count ?? 0);
 
     if (!st) {
       const init = initStateForNewRun(run.seed);
@@ -874,7 +925,6 @@ router.post("/run/move", async (req, res) => {
       rngIndex = init.rng_index;
     }
 
-    // период-чек: раз в 8 ходов, а не каждый
     if (moves % 8 === 0) {
       try {
         const { data: period, error: pErr } = await supabase
@@ -927,7 +977,7 @@ router.post("/run/move", async (req, res) => {
         gained: 0,
         spawn: null,
         durov_event: null,
-        run: {
+        run: withUndoMeta({
           id: run.id,
           user_id: run.user_id,
           period_id: run.period_id,
@@ -941,19 +991,17 @@ router.post("/run/move", async (req, res) => {
           finished_at: run.finished_at,
           created_at: run.created_at,
           updated_at: run.updated_at,
-        },
+          undo_used_count: undoUsedCount,
+        }),
       });
     }
 
     const rng = makeRng(run.seed, rngIndex);
     const afterGrid = cloneGrid(movedGrid);
-
-    // ✅ истина о спавне
     const spawn = spawnTile(afterGrid, rng);
 
     mark("after spawnTile");
 
-    // --- DUROV prank (swap among non-empty, cooldown) ---
     let durov_event = null;
 
     const prevDurov = st.durov && typeof st.durov === "object" ? st.durov : { cooldown: 0 };
@@ -983,7 +1031,6 @@ router.post("/run/move", async (req, res) => {
     const nextStatus = stillCanMove ? "active" : "finished";
     const nowIso = new Date().toISOString();
 
-    // snapshot для undo (что было ДО хода)
     const undoSnapshot = {
       prev_state: st,
       prev_rng_index: rngIndex,
@@ -995,7 +1042,6 @@ router.post("/run/move", async (req, res) => {
       undo_available: true,
     };
 
-    // ⚡ FAST PATH: обычный ход — update БЕЗ select и возвращаем computed run + spawn
     if (nextStatus === "active") {
       mark("before run update");
 
@@ -1003,7 +1049,6 @@ router.post("/run/move", async (req, res) => {
         .from("game_runs")
         .update({
           ...undoSnapshot,
-
           state: nextState,
           rng_index: nextRngIndex,
           moves: nextMoves,
@@ -1030,7 +1075,7 @@ router.post("/run/move", async (req, res) => {
         spawn,
         durov_event,
         undo_available: true,
-        run: {
+        run: withUndoMeta({
           id: run.id,
           user_id: run.user_id,
           period_id: run.period_id,
@@ -1044,18 +1089,17 @@ router.post("/run/move", async (req, res) => {
           finished_at: null,
           created_at: run.created_at,
           updated_at: nowIso,
-        },
+          undo_used_count: undoUsedCount,
+        }),
       });
     }
 
-    // game over: тут нужно вернуть актуальный run и сделать finalize
     mark("before finish update");
 
     const { data: updatedRun, error: upErr2 } = await supabase
       .from("game_runs")
       .update({
         ...undoSnapshot,
-
         state: nextState,
         rng_index: nextRngIndex,
         moves: nextMoves,
