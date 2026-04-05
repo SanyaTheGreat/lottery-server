@@ -41,15 +41,33 @@ const app = express();
 const port = 3000;
 
 // --- базовая настройка CORS ---
+const allowedOrigins = [
+  'https://frontend-nine-sigma-49.vercel.app',
+  'https://t.me',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
 app.use(cors({
-  origin: [
-    'https://frontend-nine-sigma-49.vercel.app',
-    'https://t.me'
-  ],
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    if (/^https:\/\/.*\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-gem-key'],
   credentials: true,
 }));
+
+app.options('*', cors());
 
 app.use(express.json());
 
