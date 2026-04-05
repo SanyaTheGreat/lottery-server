@@ -1,4 +1,3 @@
-// src/routes/payments.js
 import express from "express";
 import { supabase } from "../services/supabaseClient.js";
 import { requireJwt } from "../middleware/requireJwt.js";
@@ -6,7 +5,6 @@ import { requireJwt } from "../middleware/requireJwt.js";
 const router = express.Router();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-// helpers
 function ceilToInt(n) {
   return Math.ceil(Number(n));
 }
@@ -32,7 +30,9 @@ async function tgCreateInvoiceLink(payload) {
   });
 
   const data = await res.json();
-  if (!data.ok) throw new Error(data.description || "Telegram createInvoiceLink failed");
+  if (!data.ok) {
+    throw new Error(data.description || "Telegram createInvoiceLink failed");
+  }
   return data.result;
 }
 
@@ -44,7 +44,10 @@ async function getFx() {
     .limit(1)
     .single();
 
-  if (error || !data) return { ton_per_100stars: 0.5530, fee_markup: 0.20 };
+  if (error || !data) {
+    return { ton_per_100stars: 0.5530, fee_markup: 0.2 };
+  }
+
   return data;
 }
 
@@ -54,11 +57,15 @@ async function getFx() {
 router.post("/create-invoice", requireJwt(), async (req, res) => {
   try {
     const telegram_id = req.user?.telegram_id;
-    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+    if (!telegram_id) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
     const td = Number(req.body?.tickets_desired);
     if (!Number.isFinite(td) || td < 0.1 || !isStep01(td)) {
-      return res.status(400).json({ error: "tickets_desired must be >= 0.1 with step 0.1" });
+      return res.status(400).json({
+        error: "tickets_desired must be >= 0.1 with step 0.1",
+      });
     }
 
     const { ton_per_100stars, fee_markup } = await getFx();
@@ -105,7 +112,9 @@ router.post("/create-invoice", requireJwt(), async (req, res) => {
 router.post("/create-undo-invoice", requireJwt(), async (req, res) => {
   try {
     const telegram_id = Number(req.user?.telegram_id);
-    if (!telegram_id) return res.status(401).json({ error: "Unauthorized" });
+    if (!telegram_id) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
     const { data: user, error: userErr } = await supabase
       .from("users")
@@ -154,17 +163,38 @@ router.post("/create-undo-invoice", requireJwt(), async (req, res) => {
       });
     }
 
-    const payload = {
-      title: "Платный Undo",
-      description: `Отмена последнего хода в 2048 за ${price} Stars`,
-      payload: JSON.stringify({
+    const pendingRow = {
+      user_id: user.id,
+      telegram_id,
+      run_id: run.id,
+      undo_used_count,
+      price,
+      status: "pending",
+      payload_json: {
         kind: "undo",
         telegram_id,
         user_id: user.id,
         run_id: run.id,
         undo_used_count,
         price,
-      }),
+      },
+    };
+
+    const { data: paymentRow, error: paymentErr } = await supabase
+      .from("undo_payments")
+      .insert(pendingRow)
+      .select("id")
+      .single();
+
+    if (paymentErr || !paymentRow?.id) {
+      console.error("create-undo-invoice payment insert error:", paymentErr);
+      return res.status(500).json({ error: "Failed to create pending undo payment" });
+    }
+
+    const payload = {
+      title: "Платный Undo",
+      description: `Отмена последнего хода в 2048 за ${price} Stars`,
+      payload: `undo:${paymentRow.id}`,
       currency: "XTR",
       prices: [{ label: "Undo", amount: price }],
     };
@@ -177,6 +207,7 @@ router.post("/create-undo-invoice", requireJwt(), async (req, res) => {
       price,
       run_id: run.id,
       undo_used_count,
+      payment_id: paymentRow.id,
     });
   } catch (e) {
     console.error("create-undo-invoice error:", e);

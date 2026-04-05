@@ -1,4 +1,3 @@
-// src/routes/telegramPaymentsWebhook.js
 import express from "express";
 import { supabase } from "../services/supabaseClient.js";
 
@@ -9,31 +8,34 @@ router.post("/webhook", async (req, res) => {
     const update = req.body || {};
     const msg = update.message;
 
-    // Telegram ждёт быстрый 200
     res.sendStatus(200);
 
     if (!msg?.successful_payment) return;
 
     const sp = msg.successful_payment;
+    const rawPayload = String(sp.invoice_payload || "");
 
-    let payload;
-    try {
-      payload = JSON.parse(sp.invoice_payload || "{}");
-    } catch {
-      console.error("[tg-payments] invalid invoice_payload json");
+    if (!rawPayload.startsWith("undo:")) return;
+
+    const paymentId = Number(rawPayload.split(":")[1]);
+    if (!Number.isFinite(paymentId) || paymentId <= 0) {
+      console.error("[tg-payments] invalid undo payment id:", rawPayload);
       return;
     }
 
-    if (payload?.kind !== "undo") return;
+    const { data: payment, error: paymentErr } = await supabase
+      .from("undo_payments")
+      .select("*")
+      .eq("id", paymentId)
+      .maybeSingle();
 
-    const telegram_id = Number(payload.telegram_id);
-    const user_id = Number(payload.user_id);
-    const undo_used_count = Number(payload.undo_used_count ?? 0);
-    const price = Number(payload.price ?? 0);
-    const run_id = payload.run_id ? String(payload.run_id) : null;
+    if (paymentErr) {
+      console.error("[tg-payments] select undo payment error:", paymentErr);
+      return;
+    }
 
-    if (!telegram_id || !user_id || !run_id || !Number.isFinite(price) || price <= 0) {
-      console.error("[tg-payments] invalid undo payload:", payload);
+    if (!payment) {
+      console.error("[tg-payments] undo payment not found:", paymentId);
       return;
     }
 
@@ -42,44 +44,36 @@ router.post("/webhook", async (req, res) => {
       return;
     }
 
-    if (Number(sp.total_amount) !== price) {
+    if (Number(sp.total_amount) !== Number(payment.price)) {
       console.error("[tg-payments] amount mismatch:", {
-        expected: price,
+        expected: Number(payment.price),
         actual: Number(sp.total_amount),
+        paymentId,
       });
       return;
     }
 
-    const row = {
-      user_id,
-      telegram_id,
-      run_id,
-      undo_used_count,
-      price,
-      status: "paid",
-      telegram_payment_charge_id: sp.telegram_payment_charge_id || null,
-      provider_payment_charge_id: sp.provider_payment_charge_id || null,
-      payload_json: payload,
-    };
-
-    const { error } = await supabase
+    const { error: updateErr } = await supabase
       .from("undo_payments")
-      .upsert(row, {
-        onConflict: "telegram_payment_charge_id",
-        ignoreDuplicates: false,
-      });
+      .update({
+        status: "paid",
+        telegram_payment_charge_id: sp.telegram_payment_charge_id || null,
+        provider_payment_charge_id: sp.provider_payment_charge_id || null,
+      })
+      .eq("id", paymentId);
 
-    if (error) {
-      console.error("[tg-payments] upsert undo payment error:", error);
+    if (updateErr) {
+      console.error("[tg-payments] update undo payment error:", updateErr);
       return;
     }
 
     console.log("[tg-payments] undo payment saved:", {
-      run_id,
-      user_id,
-      telegram_id,
-      undo_used_count,
-      price,
+      payment_id: payment.id,
+      run_id: payment.run_id,
+      user_id: payment.user_id,
+      telegram_id: payment.telegram_id,
+      undo_used_count: payment.undo_used_count,
+      price: payment.price,
     });
   } catch (e) {
     console.error("[tg-payments] webhook error:", e);
