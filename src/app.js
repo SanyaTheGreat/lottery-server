@@ -25,14 +25,22 @@ import game2048LeaderboardRoutes from "./routes/game2048Leaderboard.js";
 
 
 // --- фоновые задачи ---
-import './checkTonTransactions.js';
-import './scheduler/autoDraw.js';
-import './scheduler/notifier.js';
-import './scheduler/msg-notifier.js';
-import "./scheduler/freeSpinNotifier.js";
-
-// ✅ 2048: авто-завершение активных игр по окончанию weekly периода
-import "./scheduler/game2048Finalizer.js";
+// ⚠️ Планировщики мутируют боевые данные и шлют реальные Telegram-сообщения.
+// Включаются только при ENABLE_SCHEDULERS=true (на проде). Локально — выключены.
+async function startSchedulers() {
+  if (String(process.env.ENABLE_SCHEDULERS).toLowerCase() !== 'true') {
+    console.log('⏸️  Планировщики выключены (ENABLE_SCHEDULERS != true)');
+    return;
+  }
+  console.log('▶️  Запускаю планировщики...');
+  await import('./checkTonTransactions.js');
+  await import('./scheduler/autoDraw.js');
+  await import('./scheduler/notifier.js');
+  await import('./scheduler/msg-notifier.js');
+  await import('./scheduler/freeSpinNotifier.js');
+  // ✅ 2048: авто-завершение активных игр по окончанию weekly периода
+  await import('./scheduler/game2048Finalizer.js');
+}
 
 // 👉 Telegram Stars webhook
 import telegramWebhook from './controllers/telegram/webhook.js';
@@ -40,7 +48,7 @@ import telegramWebhook from './controllers/telegram/webhook.js';
 console.log("🔐 ENV LOADED:", process.env.SUPABASE_URL);
 
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT || 3000);
 
 // --- базовая настройка CORS ---
 const allowedOrigins = [
@@ -183,7 +191,50 @@ app.post('/auth/telegram', async (req, res) => {
   }
 });
 
+// --- DEV-обход авторизации (только при DEV_AUTH=true) ---
+// Выдаёт JWT тестовому пользователю без Telegram. НИКОГДА не включать на проде.
+if (process.env.NODE_ENV !== 'production' && String(process.env.DEV_AUTH).toLowerCase() === 'true') {
+  app.post('/auth/dev', async (req, res) => {
+    try {
+      const telegram_id = Number(req.body?.telegram_id ?? process.env.DEV_TELEGRAM_ID ?? 99999001);
+      const username = req.body?.username ?? 'dev_tester';
+
+      // upsert тестового пользователя, чтобы /game/run/start не падал на 404
+      const { data: user, error } = await supabase
+        .from('users')
+        .upsert(
+          { telegram_id, username, updated_at: new Date().toISOString() },
+          { onConflict: 'telegram_id' }
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ /auth/dev upsert error:', error.message);
+        return res.status(500).json({ ok: false, error: 'Dev upsert failed' });
+      }
+
+      const token = jwt.sign(
+        { telegram_id, username },
+        process.env.JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      console.warn(`⚠️  DEV AUTH выдан JWT для telegram_id=${telegram_id}`);
+      return res.json({ ok: true, token, user });
+    } catch (err) {
+      console.error('❌ /auth/dev error:', err);
+      return res.status(500).json({ ok: false, error: 'Server error' });
+    }
+  });
+  console.warn('⚠️  DEV_AUTH включён: доступен POST /auth/dev (выключи на проде!)');
+}
+
 // --- приватная зона (требует JWT) ---
+if (process.env.LUDO_ENABLED !== 'true') {
+  app.use(['/wheel', '/api', '/available-gifts', '/users/withdraw', '/users/sell', '/users/buy-tickets'], (req, res) => res.status(404).json({ error: 'Mode disabled' }));
+}
+
 app.use(['/wheel', '/payments', '/inventory', '/users', '/gifts', '/game', '/game2048'], requireJwt());
 
 // --- Роуты API ---
@@ -205,24 +256,9 @@ app.use("/api", slotsRoutes);
 app.use("/api", slotAdminRoutes);
 
 // --- тестовый эндпоинт ---
-app.get('/', async (req, res) => {
-  const { data, error } = await supabase.from('users').select('*').limit(5);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
+app.get(['/', '/healthz'], (req, res) => res.json({ ok: true }));
 
 app.listen(port, () => {
   console.log(`🚀 Server running at http://localhost:${port}`);
+  startSchedulers().catch((e) => console.error('❌ startSchedulers error:', e));
 });
-
-// 👉 Временная отладка Supabase
-fetch("https://djpcftyqkwucbksknsdu.supabase.co/rest/v1/users", {
-  method: "GET",
-  headers: {
-    "apikey": process.env.SUPABASE_KEY,
-    "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
-  }
-})
-  .then(res => res.json())
-  .then(data => console.log("✅ Raw fetch success:", data))
-  .catch(err => console.error("❌ Raw fetch error:", err));
