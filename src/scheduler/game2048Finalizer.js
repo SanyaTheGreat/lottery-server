@@ -1,5 +1,5 @@
 // scheduler/game2048Finalizer.js
-import { supabase } from "../services/supabaseClient.js";
+import { rolloverWeeklyPeriods } from "../services/weeklyPeriodService.js";
 
 /**
  * 2048 Finalizer / Weekly Rollover
@@ -37,19 +37,7 @@ async function tick() {
   const startedAt = Date.now();
 
   try {
-    const { data, error } = await supabase.rpc(
-      "ffg_rollover_weekly_periods"
-    );
-
-    if (error) {
-      console.error(
-        "[2048/finalizer] RPC error ffg_rollover_weekly_periods:",
-        error.message
-      );
-      return;
-    }
-
-    const payload = data ?? {};
+    const payload = await rolloverWeeklyPeriods() ?? {};
     const closed = payload.closed_periods ?? 0;
     const created = payload.created_new_active ?? false;
 

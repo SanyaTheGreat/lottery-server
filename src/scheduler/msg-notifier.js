@@ -108,7 +108,7 @@ async function tick() {
 }
 
 // 🔁 автозапуск при импорте (как у твоих остальных фоновых задач)
-if (!global.__MSG_NOTIFIER_STARTED__) {
+if (process.env.LEGACY_GAME_NOTIFICATIONS_ENABLED === 'true' && process.env.LUDO_ENABLED === 'true' && !global.__MSG_NOTIFIER_STARTED__) {
   global.__MSG_NOTIFIER_STARTED__ = true;
   console.log(`⏰ msg-notifier: started | interval=${CHECK_INTERVAL_MS}ms, rateDelay=${RATE_DELAY_MS}ms`);
   tick(); // первый прогон сразу

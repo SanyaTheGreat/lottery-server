@@ -1,6 +1,7 @@
 // routes/game2048.js
 import express from "express";
 import crypto from "crypto";
+import { getCurrentWeeklyPeriod } from "../services/weeklyPeriodService.js";
 import { supabase } from "../services/supabaseClient.js";
 
 const router = express.Router();
@@ -36,29 +37,6 @@ async function getUserIdCached(tgId) {
 
   USER_ID_CACHE.set(tgId, { id: user.id, exp: now + USER_ID_TTL_MS });
   return user.id;
-}
-
-function utcDateString(d = new Date()) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function computePeriodBoundsUTC(now = new Date()) {
-  const startAt = new Date(now.toISOString());
-
-  const day = now.getUTCDay();
-  const daysToSunday = (7 - day) % 7;
-
-  const sunday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
-  sunday.setUTCDate(sunday.getUTCDate() + daysToSunday);
-
-  const endAt = new Date(Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 21, 0, 0, 0));
-  if (now >= endAt) endAt.setUTCDate(endAt.getUTCDate() + 7);
-
-  const freezeAt = new Date(endAt.getTime() - 60_000);
-  return { startAt, freezeAt, endAt };
 }
 
 /**
@@ -315,47 +293,6 @@ function initStateForNewRun(seedStr) {
   };
 }
 
-async function getOrCreateActivePeriod(now) {
-  const { data: active, error: e1 } = await supabase
-    .from("weekly_periods")
-    .select("*")
-    .eq("status", "active")
-    .order("start_at", { ascending: false })
-    .limit(1);
-
-  if (e1) throw new Error(`weekly_periods select failed: ${e1.message}`);
-  if (active?.length) return active[0];
-
-  const { startAt, freezeAt, endAt } = computePeriodBoundsUTC(now);
-
-  const { data: created, error: e2 } = await supabase
-    .from("weekly_periods")
-    .insert({
-      start_at: startAt.toISOString(),
-      freeze_at: freezeAt.toISOString(),
-      end_at: endAt.toISOString(),
-      status: "active",
-    })
-    .select("*")
-    .single();
-
-  if (e2) {
-    const { data: active2, error: e3 } = await supabase
-      .from("weekly_periods")
-      .select("*")
-      .eq("status", "active")
-      .order("start_at", { ascending: false })
-      .limit(1);
-
-    if (e3) throw new Error(`weekly_periods reselect failed: ${e3.message}`);
-    if (active2?.length) return active2[0];
-
-    throw new Error(`weekly_periods insert failed: ${e2.message}`);
-  }
-
-  return created;
-}
-
 async function finalizeRun({ run, reason }) {
   const nowIso = new Date().toISOString();
   const finalScore = Number(run.current_score ?? 0);
@@ -507,7 +444,7 @@ router.post("/run/start", async (req, res) => {
 
     const { data: user, error: uErr } = await supabase
       .from("users")
-      .select("id, telegram_id, daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance")
+      .select("id, telegram_id")
       .eq("telegram_id", tgId)
       .maybeSingle();
 
@@ -517,41 +454,7 @@ router.post("/run/start", async (req, res) => {
     }
     if (!user) return res.status(404).json({ ok: false, error: "User not found" });
 
-    const today = utcDateString(now);
-
-    let dailyDayUtc = user.daily_day_utc ? String(user.daily_day_utc) : null;
-    let dailyAttempts = Number(user.daily_attempts_remaining ?? 0);
-    let dailyPlaysUsed = Number(user.daily_plays_used ?? 0);
-    let referralBalance = Number(user.referral_attempts_balance ?? 0);
-
-    const needsReset = !dailyDayUtc || dailyDayUtc !== today;
-
-    if (needsReset) {
-      dailyDayUtc = today;
-      dailyAttempts = 4;
-      dailyPlaysUsed = 0;
-
-      const { error: rErr } = await supabase
-        .from("users")
-        .update({
-          daily_day_utc: today,
-          daily_attempts_remaining: dailyAttempts,
-          daily_plays_used: dailyPlaysUsed,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", user.id);
-
-      if (rErr) {
-        console.error("[2048/start] daily reset update error:", rErr.message);
-        return res.status(500).json({ ok: false, error: "DB error (daily reset)" });
-      }
-    }
-
-    if (dailyPlaysUsed >= 20) {
-      return res.status(429).json({ ok: false, error: "Daily limit reached (20)" });
-    }
-
-    const period = await getOrCreateActivePeriod(now);
+    const period = await getCurrentWeeklyPeriod(now);
 
     const freezeAt = new Date(period.freeze_at);
     const endAt = new Date(period.end_at);
@@ -565,6 +468,7 @@ router.post("/run/start", async (req, res) => {
       .from("game_runs")
       .select(RUN_SELECT_CLIENT)
       .eq("user_id", user.id)
+      .eq("period_id", period.id)
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(1);
@@ -580,42 +484,8 @@ router.post("/run/start", async (req, res) => {
         mode: "resume",
         period,
         run: withUndoMeta(activeRuns[0]),
-        attempts: {
-          daily_day_utc: dailyDayUtc,
-          daily_attempts_remaining: dailyAttempts,
-          referral_attempts_balance: referralBalance,
-          daily_plays_used: dailyPlaysUsed,
-        },
+        attempts: { unlimited: true },
       });
-    }
-
-    let usedFrom = null;
-
-    if (dailyAttempts > 0) {
-      dailyAttempts -= 1;
-      usedFrom = "daily";
-    } else if (referralBalance > 0) {
-      referralBalance -= 1;
-      usedFrom = "referral";
-    } else {
-      return res.status(402).json({ ok: false, error: "No attempts available" });
-    }
-
-    dailyPlaysUsed += 1;
-
-    const { error: updErr } = await supabase
-      .from("users")
-      .update({
-        daily_attempts_remaining: dailyAttempts,
-        daily_plays_used: dailyPlaysUsed,
-        referral_attempts_balance: referralBalance,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", user.id);
-
-    if (updErr) {
-      console.error("[2048/start] attempts update error:", updErr.message);
-      return res.status(500).json({ ok: false, error: "DB error (attempts)" });
     }
 
     const seed = randomSeedBigintString();
@@ -653,6 +523,7 @@ router.post("/run/start", async (req, res) => {
         .from("game_runs")
         .select(RUN_SELECT_CLIENT)
         .eq("user_id", user.id)
+        .eq("period_id", period.id)
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(1);
@@ -663,32 +534,22 @@ router.post("/run/start", async (req, res) => {
           mode: "resume",
           period,
           run: withUndoMeta(fallback[0]),
-          attempts: {
-            daily_day_utc: dailyDayUtc,
-            daily_attempts_remaining: dailyAttempts,
-            referral_attempts_balance: referralBalance,
-            daily_plays_used: dailyPlaysUsed,
-          },
+          attempts: { unlimited: true },
         });
       }
 
       return res.status(500).json({ ok: false, error: "Failed to create run" });
     }
 
-    console.log(`[2048/start] tg=${tgId} created run=${createdRun.id} usedFrom=${usedFrom}`);
+    console.log(`[2048/start] tg=${tgId} created run=${createdRun.id} attempts=unlimited`);
 
     return res.status(201).json({
       ok: true,
       mode: "new",
-      used_from: usedFrom,
+      used_from: "unlimited",
       period,
       run: withUndoMeta(createdRun),
-      attempts: {
-        daily_day_utc: dailyDayUtc,
-        daily_attempts_remaining: dailyAttempts,
-        referral_attempts_balance: referralBalance,
-        daily_plays_used: dailyPlaysUsed,
-      },
+      attempts: { unlimited: true },
     });
   } catch (e) {
     console.error("[2048/start] unexpected:", e);

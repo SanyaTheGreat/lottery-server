@@ -28,18 +28,19 @@ import game2048LeaderboardRoutes from "./routes/game2048Leaderboard.js";
 // ⚠️ Планировщики мутируют боевые данные и шлют реальные Telegram-сообщения.
 // Включаются только при ENABLE_SCHEDULERS=true (на проде). Локально — выключены.
 async function startSchedulers() {
-  if (String(process.env.ENABLE_SCHEDULERS).toLowerCase() !== 'true') {
-    console.log('⏸️  Планировщики выключены (ENABLE_SCHEDULERS != true)');
-    return;
-  }
-  console.log('▶️  Запускаю планировщики...');
+  const weeklyEnabled = process.env.GAME2048_FINALIZER_ENABLED === 'true' ||
+    (process.env.NODE_ENV === 'production' && process.env.GAME2048_FINALIZER_ENABLED !== 'false');
+  if (weeklyEnabled) await import('./scheduler/game2048Finalizer.js');
+
+  // Legacy game jobs must not run in the 2048-only release.
+  if (process.env.ENABLE_SCHEDULERS !== 'true' || process.env.LUDO_ENABLED !== 'true') return;
   await import('./checkTonTransactions.js');
   await import('./scheduler/autoDraw.js');
-  await import('./scheduler/notifier.js');
-  await import('./scheduler/msg-notifier.js');
-  await import('./scheduler/freeSpinNotifier.js');
-  // ✅ 2048: авто-завершение активных игр по окончанию weekly периода
-  await import('./scheduler/game2048Finalizer.js');
+  if (process.env.LEGACY_GAME_NOTIFICATIONS_ENABLED === 'true') {
+    await import('./scheduler/notifier.js');
+    await import('./scheduler/msg-notifier.js');
+  }
+  if (process.env.FREE_SPIN_NOTIFICATIONS_ENABLED === 'true') await import('./scheduler/freeSpinNotifier.js');
 }
 
 // 👉 Telegram Stars webhook

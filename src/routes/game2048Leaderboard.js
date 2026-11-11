@@ -1,4 +1,5 @@
 import express from "express";
+import { getCurrentWeeklyPeriod } from "../services/weeklyPeriodService.js";
 import { supabase } from "../services/supabaseClient.js";
 
 const router = express.Router();
@@ -22,6 +23,7 @@ function getTelegramId(req) {
  * me: позиция текущего пользователя в этом периоде (если есть запись в weekly_scores)
  */
 router.get("/leaderboard/week", async (req, res) => {
+  res.set("Cache-Control", "no-store");
   const limit = clampInt(req.query.limit, 1, 100, 50);
 
   const tgId = getTelegramId(req); // нужен для me
@@ -32,25 +34,7 @@ router.get("/leaderboard/week", async (req, res) => {
 
   try {
     // 1) active period
-    const { data: periods, error: pErr } = await supabase
-      .from("weekly_periods")
-      .select("id,start_at,freeze_at,end_at,status")
-      .eq("status", "active")
-      .order("start_at", { ascending: false })
-      .limit(1);
-
-    mark("after period select");
-
-    if (pErr) {
-      console.error("[2048/lb] weekly_periods select error:", pErr.message);
-      return res.status(500).json({ ok: false, error: "DB error (weekly_periods)" });
-    }
-
-    if (!periods?.length) {
-      return res.json({ ok: true, period: null, top: [], me: null });
-    }
-
-    const period = periods[0];
+    const period = await getCurrentWeeklyPeriod();
 
     // 2) TOP N for period (place = idx+1)
     const { data: scores, error: sErr } = await supabase

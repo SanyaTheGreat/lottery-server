@@ -1,17 +1,9 @@
 import { supabase } from '../../services/supabaseClient.js';
+import { getCurrentWeeklyPeriod } from '../../services/weeklyPeriodService.js';
 
 const DAYS_LOCK = 21;
 
 // helpers
-function utcMidnightNextISO(now = new Date()) {
-  // ближайшие 00:00 UTC (завтра)
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  const next = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0));
-  return next.toISOString();
-}
-
 const getProfile = async (req, res) => {
   try {
     const telegram_id = req.user?.telegram_id;
@@ -22,10 +14,7 @@ const getProfile = async (req, res) => {
     // 1) user базовый + attempts поля для 2048
     const { data: user, error: userErr } = await supabase
       .from('users')
-      .select(`
-        id, telegram_id, username, wallet, tickets, payload, avatar_url,
-        daily_day_utc, daily_attempts_remaining, daily_plays_used, referral_attempts_balance
-      `)
+      .select('id, telegram_id, username, wallet, tickets, payload, avatar_url')
       .eq('telegram_id', telegram_id)
       .single();
 
@@ -71,19 +60,7 @@ const getProfile = async (req, res) => {
     const withdraw_available = can >= 3;
 
     // ====== 2048: active period ======
-    const { data: periods, error: pErr } = await supabase
-      .from('weekly_periods')
-      .select('id,start_at,freeze_at,end_at,status')
-      .eq('status', 'active')
-      .order('start_at', { ascending: false })
-      .limit(1);
-
-    if (pErr) {
-      console.error('weekly_periods select error:', pErr.message);
-      return res.status(500).json({ error: 'DB error (weekly_periods)' });
-    }
-
-    const period = periods?.[0] ?? null;
+    const period = await getCurrentWeeklyPeriod();
 
     // ====== 2048: best_all_time + games_played ======
     // games_played = COUNT(*) всех game_runs пользователя
@@ -165,12 +142,7 @@ const getProfile = async (req, res) => {
     }
 
     // ====== 2048: attempts ======
-    const attempts = {
-      daily_attempts_remaining: Number(user.daily_attempts_remaining ?? 0),
-      referral_attempts_balance: Number(user.referral_attempts_balance ?? 0),
-      daily_plays_used: Number(user.daily_plays_used ?? 0),
-      resets_at_utc: utcMidnightNextISO(new Date()),
-    };
+    const attempts = { unlimited: true };
 
     return res.status(200).json({
       telegram_id: user.telegram_id,

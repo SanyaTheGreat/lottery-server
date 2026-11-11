@@ -219,10 +219,12 @@ if __name__ == "__main__":
     print("🚀 AppStarterBot запущен и ждёт /start")
 
     # Поток уведомлений по колёсам (твой существующий)
-    threading.Thread(target=notify_users_loop, daemon=True).start()
+    if os.getenv("LEGACY_GAME_NOTIFICATIONS_ENABLED", "false").lower() == "true" and os.getenv("LUDO_ENABLED", "false").lower() == "true":
+        threading.Thread(target=notify_users_loop, daemon=True).start()
 
     # Поток уведомлений о бесплатном спине (новый)
-    threading.Thread(target=notify_free_spin_loop, daemon=True).start()
+    if os.getenv("FREE_SPIN_NOTIFICATIONS_ENABLED", "false").lower() == "true" and os.getenv("LUDO_ENABLED", "false").lower() == "true":
+        threading.Thread(target=notify_free_spin_loop, daemon=True).start()
 
     # Основной цикл бота
     bot.infinity_polling()

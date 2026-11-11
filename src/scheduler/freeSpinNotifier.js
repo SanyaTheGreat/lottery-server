@@ -1,6 +1,8 @@
 // src/scheduler/freeSpinNotifier.js
 import { supabase } from "../services/supabaseClient.js";
 
+const ENABLED = process.env.FREE_SPIN_NOTIFICATIONS_ENABLED === 'true' && process.env.LUDO_ENABLED === 'true';
+
 const BOT_TOKEN  = process.env.BOT_TOKEN; // тот же токен бота
 const WEBAPP_URL = (process.env.WEBAPP_URL || "https://frontend-nine-sigma-49.vercel.app").replace(/\/$/, "");
 const INTERVAL_MS = Number(process.env.FREE_SPIN_INTERVAL_MS || 900_000); // по умолчанию 15 мин
@@ -95,7 +97,7 @@ async function markNotified(userId) {
 
 async function runOnce() {
   try {
-    if (!BOT_TOKEN) return;
+    if (!ENABLED || !BOT_TOKEN) return;
 
     const caseId = await getCheapestCaseId();
     if (!caseId) return;
@@ -126,5 +128,8 @@ async function runOnce() {
   }
 }
 
-console.log("⏰ freeSpinNotifier started (same process)");
-setInterval(runOnce, INTERVAL_MS);
+if (ENABLED) {
+  console.log('freeSpinNotifier started');
+  setInterval(runOnce, INTERVAL_MS);
+  runOnce();
+}
