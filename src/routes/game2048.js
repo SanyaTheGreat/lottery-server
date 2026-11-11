@@ -60,8 +60,9 @@ const RUN_SELECT_WITH_UNDO =
   RUN_SELECT_CLIENT +
   ",prev_state,prev_rng_index,prev_moves,prev_current_score,prev_status,prev_finished_reason,prev_finished_at,undo_available";
 
-const DUROV_CHANCE = 0.08;
-const DUROV_COOLDOWN_MOVES = 5;
+const DUROV_CHANCE = 0.10;
+const DUROV_MIN_TILE = 1024;
+const DUROV_COOLDOWN_MOVES = 6;
 
 function getUndoPrice(undoUsedCount) {
   const n = Number(undoUsedCount ?? 0);
@@ -869,9 +870,10 @@ router.post("/run/move", async (req, res) => {
     let durovCooldown = Number(prevDurov.cooldown ?? 0);
     if (!Number.isFinite(durovCooldown) || durovCooldown < 0) durovCooldown = 0;
 
-    durovCooldown = Math.max(0, durovCooldown - 1);
-
-    if (durovCooldown === 0) {
+    // Skip six complete successful moves after an intervention.
+    if (durovCooldown > 0) {
+      durovCooldown -= 1;
+    } else if (afterGrid.some(row => row.some(value => value >= DUROV_MIN_TILE))) {
       if (rng.next01() < DUROV_CHANCE) {
         durov_event = durovSwap(afterGrid, rng);
         if (durov_event) durovCooldown = DUROV_COOLDOWN_MOVES;
