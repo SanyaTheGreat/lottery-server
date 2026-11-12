@@ -45,6 +45,8 @@ test('starts a new game with zero attempts and more than 20 daily plays', async 
   assert.equal(res.body.run.undo_used_count, 0);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].table, 'game_runs');
+  assert.equal(writes[0].row.audit_action.type, 'start');
+  assert.ok(writes[0].row.audit_action.request_id);
 });
 
 test('resumes the active game without consuming attempts or creating another run', async () => {
